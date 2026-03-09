@@ -106,6 +106,8 @@ export default function TrackingScreen({ navigation, route }) {
           ambulanceLocation={ambulanceLocation}
           hospitalLocation={hospital?.location}
           route={currentRoute}
+          status={status}
+          eta={eta}
         />
       </View>
 

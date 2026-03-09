@@ -76,7 +76,7 @@ export default function HospitalNavigationMap({ emergency, hospitalLocation, hos
       phaseLabel,
       destinationLabel,
       panelSubtitle,
-      markerVariant: 'ambulance',
+      markerVariant: 'arrow',
       hintText: 'Tap map to show navigation',
     };
   }, [currentPosition, destination, destinationLabel, panelSubtitle, phaseLabel]);
