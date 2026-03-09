@@ -21,22 +21,80 @@ const makeMapHTML = (dLat, dLng, tLat, tLng, route, tEmoji) => `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<style>*{margin:0;padding:0;}html,body,#map{width:100%;height:100%;background:#0D0D0D;}</style>
+<style>
+  *{margin:0;padding:0;}html,body,#map{width:100%;height:100%;background:#0D0D0D;}
+  .driver-icon{font-size:28px;line-height:1;display:block;}
+</style>
 </head>
 <body><div id="map"></div>
 <script>
-var map=L.map('map',{zoomControl:true,attributionControl:false});
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
-var dIcon=L.divIcon({html:'<div style="font-size:28px">🚑</div>',className:'',iconSize:[30,30],iconAnchor:[15,15]});
-var tIcon=L.divIcon({html:'<div style="font-size:28px">${tEmoji}</div>',className:'',iconSize:[30,30],iconAnchor:[15,15]});
-var dMarker=L.marker([${dLat},${dLng}],{icon:dIcon}).addTo(map);
-L.marker([${tLat},${tLng}],{icon:tIcon}).addTo(map);
-var route=${JSON.stringify(route || [])};
-if(route.length>0)L.polyline(route,{color:'#007AFF',weight:5,opacity:0.9}).addTo(map);
-map.fitBounds([[${dLat},${dLng}],[${tLat},${tLng}]],{padding:[60,60]});
-function onMsg(e){try{var d=JSON.parse(e.data);if(d.type==='MOVE')dMarker.setLatLng([d.lat,d.lng]);}catch(err){}}
-window.addEventListener('message',onMsg);
-document.addEventListener('message',onMsg);
+  // Simple bearing between two lat/lng points
+  function bearing(lat1, lon1, lat2, lon2) {
+    var toRad = function(d){return d*Math.PI/180};
+    var toDeg = function(d){return d*180/Math.PI};
+    var dLon = toRad(lon2 - lon1);
+    var y = Math.sin(dLon) * Math.cos(toRad(lat2));
+    var x = Math.cos(toRad(lat1))*Math.sin(toRad(lat2)) - Math.sin(toRad(lat1))*Math.cos(toRad(lat2))*Math.cos(dLon);
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  var map = L.map('map', { zoomControl: true, attributionControl: false });
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+
+  // Driver marker: wrap the icon so we can rotate the inner element without touching Leaflet's translate.
+  var driverHtml = '<div class="driver-wrap" style="width:36px;height:36px;display:flex;align-items:center;justify-content:center"><div id="driver-icon" class="driver-icon">🚑</div></div>';
+  var targetHtml = '<div style="font-size:28px">${tEmoji}</div>';
+
+  var dMarker = L.marker([${dLat},${dLng}], { icon: L.divIcon({ html: driverHtml, className: '', iconSize: [36,36], iconAnchor: [18,18] }) }).addTo(map);
+  var tMarker = L.marker([${tLat},${tLng}], { icon: L.divIcon({ html: targetHtml, className: '', iconSize: [30,30], iconAnchor: [15,15] }) }).addTo(map);
+
+  var route = ${JSON.stringify(route || [])};
+  if (route && route.length>0) L.polyline(route, { color: '#007AFF', weight: 5, opacity: 0.9 }).addTo(map);
+
+  // Fit bounds initially (do not refit on updates)
+  try { map.fitBounds([[${dLat},${dLng}],[${tLat},${tLng}]], { padding: [60,60] }); } catch (e) {}
+
+  // Smooth animation state
+  var anim = { running: false, start: null, duration: 600, from: null, to: null };
+
+  function animateTo(lat, lng) {
+    // Cancel previous animation
+    anim.running = false;
+    anim.start = performance.now();
+    anim.duration = 600; // ms
+    var cur = dMarker.getLatLng();
+    anim.from = { lat: cur.lat, lng: cur.lng };
+    anim.to = { lat: lat, lng: lng };
+    anim.running = true;
+
+    var br = bearing(anim.from.lat, anim.from.lng, anim.to.lat, anim.to.lng);
+    var inner = document.getElementById('driver-icon');
+    if (inner) inner.style.transform = 'rotate(' + br + 'deg)';
+
+    function step(now) {
+      if (!anim.running) return;
+      var t = Math.min(1, (now - anim.start) / anim.duration);
+      var latNow = anim.from.lat + (anim.to.lat - anim.from.lat) * t;
+      var lngNow = anim.from.lng + (anim.to.lng - anim.from.lng) * t;
+      dMarker.setLatLng([latNow, lngNow]);
+      // Pan map smoothly a bit to follow driver
+      if (t > 0.2) map.panTo([latNow, lngNow], { animate: true, duration: 0.6 });
+      if (t < 1) requestAnimationFrame(step); else anim.running = false;
+    }
+    requestAnimationFrame(step);
+  }
+
+  function onMsg(e) {
+    try {
+      var d = JSON.parse(e.data);
+      if (d.type === 'MOVE') {
+        animateTo(d.lat, d.lng);
+      }
+    } catch(err){}
+  }
+
+  window.addEventListener('message', onMsg);
+  document.addEventListener('message', onMsg);
 </script>
 </body></html>`;
 
