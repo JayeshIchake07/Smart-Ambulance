@@ -1,0 +1,41 @@
+# Node
+node_modules/
+**/node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env files
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode
+.vscode/
+
+# Build
+build/
+dist/
+
+# Expo
+.expo/
+
+# Mobile
+android/
+ios/
+
+# Misc
+*.log
+
+# Ignore IDE files
+.idea/
+
+# Ignore npm package-lock if needed
+package-lock.json
+
+# Ignore backend database
+backend/data/
