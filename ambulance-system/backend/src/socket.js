@@ -57,7 +57,9 @@ module.exports = (io) => {
 
     socket.on('driver-location', async ({ lat, lng, emergencyId }) => {
       try {
-        const emergency = await Emergency.findById(emergencyId);
+        const emergency = await Emergency.findById(emergencyId)
+          .populate('hospital')
+          .populate('ambulance');
         if (!emergency) return;
 
         // Update ambulance location in DB
@@ -92,6 +94,28 @@ module.exports = (io) => {
           eta,
           emergencyId,
         });
+
+        if (emergency.hospital) {
+          io.to('hospital').emit('hospital-ambulance-location', {
+            emergencyId,
+            patientType: emergency.emergencyType,
+            status: emergency.status,
+            lat,
+            lng,
+            eta,
+            hospitalId: emergency.hospital._id,
+            hospitalName: emergency.hospital.name,
+            hospitalLocation: emergency.hospital.location,
+            victimLocation: emergency.victimLocation,
+            ambulance: emergency.ambulance
+              ? {
+                  id: emergency.ambulance._id,
+                  vehicle: emergency.ambulance.vehicle,
+                  type: emergency.ambulance.type,
+                }
+              : null,
+          });
+        }
       } catch (err) {
         console.error('driver-location error:', err.message);
       }
@@ -125,12 +149,16 @@ module.exports = (io) => {
         io.to('hospital').emit('patient-arrived', {
           emergencyId,
           patientType: emergency.emergencyType,
+          status: 'patient_picked_up',
           ambulanceETA: emergency.eta,
           ambulanceLocation: {
             lat: emergency.ambulance.location.lat,
             lng: emergency.ambulance.location.lng,
           },
           hospitalId: emergency.hospital._id,
+          hospitalName: emergency.hospital.name,
+          hospitalLocation: emergency.hospital.location,
+          victimLocation: emergency.victimLocation,
         });
 
         console.log(`🏥 Patient picked up for emergency: ${emergencyId}`);

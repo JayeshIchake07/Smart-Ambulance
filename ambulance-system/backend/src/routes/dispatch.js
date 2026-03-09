@@ -92,9 +92,15 @@ router.post('/', protect, async (req, res) => {
     // Notify hospital
     io.to('hospital').emit('hospital-alert', {
       emergencyId: emergency._id,
+      patientType: emergencyType,
       emergencyType,
+      status: 'dispatched',
       ambulanceETA: eta,
       ambulanceLocation: ambulance.location,
+      victimLocation: { lat, lng },
+      hospitalId: hospital._id,
+      hospitalName: hospital.name,
+      hospitalLocation: hospital.location,
     });
 
     // ── 7. Respond to victim ──────────────────────────────────────────────
@@ -125,6 +131,15 @@ router.post('/', protect, async (req, res) => {
     });
   } catch (err) {
     console.error('Dispatch error:', err.message);
+
+    if (err.code === 'NO_AMBULANCES_AVAILABLE') {
+      return res.status(409).json({ message: err.message });
+    }
+
+    if (err.message === 'No hospitals available') {
+      return res.status(503).json({ message: err.message });
+    }
+
     res.status(500).json({ message: err.message });
   }
 });

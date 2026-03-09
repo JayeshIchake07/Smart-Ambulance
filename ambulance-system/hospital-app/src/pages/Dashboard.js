@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import api, { getSocket, BASE_URL } from '../services/api';
+import React, { useState, useEffect } from 'react';
+import api, { getSocket } from '../services/api';
+import HospitalNavigationMap from '../components/HospitalNavigationMap';
 
 // ── Design Tokens ──────────────────────────────────────────────────────────
 const c = {
@@ -105,55 +106,6 @@ const TYPE_EMOJIS = {
   Breathing: '🫁', Injury: '🩹', Unknown: '🆘',
 };
 
-// ── Live Map Component ─────────────────────────────────────────────────────
-const LiveMap = ({ emergencies }) => {
-  const mapRef = useRef(null);
-  const mapInstanceRef = useRef(null);
-  const markersRef = useRef({});
-
-  useEffect(() => {
-    if (!mapRef.current || mapInstanceRef.current) return;
-
-    // Dynamically load Leaflet
-    const L = window.L;
-    if (!L) return;
-
-    const map = L.map(mapRef.current, { zoomControl: true, attributionControl: false });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-    map.setView([19.076, 72.8777], 12);
-    mapInstanceRef.current = map;
-  }, []);
-
-  useEffect(() => {
-    const L = window.L;
-    const map = mapInstanceRef.current;
-    if (!L || !map) return;
-
-    // Clear old markers
-    Object.values(markersRef.current).forEach((m) => m.remove());
-    markersRef.current = {};
-
-    emergencies.forEach((em) => {
-      if (em.ambulanceLocation) {
-        const icon = L.divIcon({ html: '🚑', className: '', iconSize: [28, 28] });
-        const marker = L.marker(
-          [em.ambulanceLocation.lat, em.ambulanceLocation.lng],
-          { icon }
-        ).addTo(map);
-        marker.bindPopup(`<b>${em.patientType}</b><br>ETA: ${em.ambulanceETA} min`);
-        markersRef.current[em.emergencyId] = marker;
-      }
-    });
-  }, [emergencies]);
-
-  return (
-    <div
-      ref={mapRef}
-      style={{ width: '100%', height: 320, background: '#e8f4f8', borderRadius: 0 }}
-    />
-  );
-};
-
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [emergencies, setEmergencies] = useState([]);
@@ -161,6 +113,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState({ active: 0, beds: 75, enRoute: 0, avgResponse: 7 });
   const [connected, setConnected] = useState(false);
   const [hospitalName, setHospitalName] = useState('Lilavati Hospital');
+  const [hospital, setHospital] = useState(null);
 
   // Login + socket setup
   useEffect(() => {
@@ -177,6 +130,7 @@ export default function Dashboard() {
         // Load hospital data
         const hospRes = await api.get('/api/hospital');
         if (hospRes.data.length > 0) {
+          setHospital(hospRes.data[0]);
           setHospitalName(hospRes.data[0].name);
           setStats((s) => ({ ...s, beds: hospRes.data[0].availableBeds }));
         }
@@ -204,7 +158,11 @@ export default function Dashboard() {
       setEmergencies((prev) => {
         const exists = prev.find((e) => e.emergencyId === data.emergencyId);
         if (exists) return prev;
-        return [{ ...data, receivedAt: new Date() }, ...prev];
+        return [{
+          ...data,
+          patientType: data.patientType || data.emergencyType || 'Unknown',
+          receivedAt: new Date(),
+        }, ...prev];
       });
       setStats((s) => ({ ...s, active: s.active + 1, enRoute: s.enRoute + 1 }));
     });
@@ -214,7 +172,37 @@ export default function Dashboard() {
       setEmergencies((prev) =>
         prev.map((e) =>
           e.emergencyId === data.emergencyId
-            ? { ...e, status: 'arriving', ambulanceETA: data.ambulanceETA, ambulanceLocation: data.ambulanceLocation }
+            ? {
+                ...e,
+                patientType: data.patientType || e.patientType,
+                status: 'arriving',
+                ambulanceETA: data.ambulanceETA,
+                ambulanceLocation: data.ambulanceLocation,
+                hospitalId: data.hospitalId || e.hospitalId,
+                hospitalLocation: data.hospitalLocation || e.hospitalLocation,
+                victimLocation: data.victimLocation || e.victimLocation,
+              }
+            : e
+        )
+      );
+    });
+
+    socket.on('hospital-ambulance-location', (data) => {
+      setEmergencies((prev) =>
+        prev.map((e) =>
+          e.emergencyId === data.emergencyId
+            ? {
+                ...e,
+                patientType: data.patientType || e.patientType,
+                status: data.status || e.status,
+                ambulanceETA: data.eta ?? e.ambulanceETA,
+                ambulanceLocation: { lat: data.lat, lng: data.lng },
+                hospitalId: data.hospitalId || e.hospitalId,
+                hospitalName: data.hospitalName || e.hospitalName,
+                hospitalLocation: data.hospitalLocation || e.hospitalLocation,
+                victimLocation: data.victimLocation || e.victimLocation,
+                ambulance: data.ambulance || e.ambulance,
+              }
             : e
         )
       );
@@ -225,6 +213,7 @@ export default function Dashboard() {
       socket.off('disconnect');
       socket.off('hospital-alert');
       socket.off('patient-arrived');
+      socket.off('hospital-ambulance-location');
     };
   }, []);
 
@@ -240,6 +229,12 @@ export default function Dashboard() {
     { label: 'Ambulances En Route',value: stats.enRoute,emoji: '🚑', color: c.warning },
     { label: 'Avg Response (min)', value: stats.avgResponse, emoji: '⏱️', color: c.safe },
   ];
+
+  const trackedEmergency =
+    emergencies.find((em) => em.status === 'arriving' && em.ambulanceLocation) ||
+    emergencies.find((em) => em.ambulanceLocation) ||
+    emergencies[0] ||
+    null;
 
   return (
     <div style={css.page}>
@@ -340,9 +335,13 @@ export default function Dashboard() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div style={css.section}>
               <div style={css.sectionHeader}>
-                <span style={css.sectionTitle}>🗺️ Live Map</span>
+                <span style={css.sectionTitle}>🗺️ Live Navigation</span>
               </div>
-              <LiveMap emergencies={emergencies} />
+              <HospitalNavigationMap
+                emergency={trackedEmergency}
+                hospitalLocation={hospital?.location || trackedEmergency?.hospitalLocation}
+                hospitalName={hospital?.name || trackedEmergency?.hospitalName}
+              />
             </div>
 
             {/* Hospital Status Card */}

@@ -1,5 +1,53 @@
 const Ambulance = require('../models/Ambulance');
+const Emergency = require('../models/Emergency');
 const { getDistance } = require('./distance');
+
+const TERMINAL_EMERGENCY_STATUSES = ['completed', 'cancelled'];
+const STALE_EMERGENCY_MINUTES = 30;
+
+const releaseReusableAmbulances = async () => {
+  const cutoffTime = new Date(Date.now() - STALE_EMERGENCY_MINUTES * 60 * 1000);
+  const ambulances = await Ambulance.find({ status: { $ne: 'available' } })
+    .populate('currentEmergency', 'status updatedAt');
+
+  const ambulanceIdsToRelease = [];
+  const staleEmergencyIds = [];
+
+  ambulances.forEach((ambulance) => {
+    const emergency = ambulance.currentEmergency;
+
+    if (!emergency) {
+      ambulanceIdsToRelease.push(ambulance._id);
+      return;
+    }
+
+    if (TERMINAL_EMERGENCY_STATUSES.includes(emergency.status)) {
+      ambulanceIdsToRelease.push(ambulance._id);
+      return;
+    }
+
+    if (emergency.updatedAt < cutoffTime) {
+      ambulanceIdsToRelease.push(ambulance._id);
+      staleEmergencyIds.push(emergency._id);
+    }
+  });
+
+  if (staleEmergencyIds.length) {
+    await Emergency.updateMany(
+      { _id: { $in: staleEmergencyIds } },
+      { status: 'cancelled' }
+    );
+  }
+
+  if (ambulanceIdsToRelease.length) {
+    await Ambulance.updateMany(
+      { _id: { $in: ambulanceIdsToRelease } },
+      { status: 'available', currentEmergency: null }
+    );
+  }
+
+  return ambulanceIdsToRelease.length;
+};
 
 /**
  * findBestAmbulance
@@ -11,7 +59,17 @@ const findBestAmbulance = async (victimLat, victimLng, needsICU = false) => {
   let ambulances = await Ambulance.find({ status: 'available' });
 
   if (!ambulances.length) {
-    throw new Error('No ambulances available at this time');
+    const releasedCount = await releaseReusableAmbulances();
+
+    if (releasedCount > 0) {
+      ambulances = await Ambulance.find({ status: 'available' });
+    }
+  }
+
+  if (!ambulances.length) {
+    const error = new Error('No ambulances available at this time');
+    error.code = 'NO_AMBULANCES_AVAILABLE';
+    throw error;
   }
 
   // If ICU required, prefer ICU ambulances; fall back to all if none available

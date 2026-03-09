@@ -191,7 +191,7 @@ export default function EmergencyScreen({ navigation, route }) {
         <TouchableOpacity
           style={[styles.sendBtn, !selected && { opacity: 0.5 }]}
           onPress={handleSendHelp}
-          disabled={loading || !selected}
+          disabled={loading}
         >
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />
