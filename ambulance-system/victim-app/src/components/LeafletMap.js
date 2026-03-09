@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 
@@ -120,33 +120,44 @@ const generateLeafletHTML = ({ victimLat, victimLng, ambulanceLat, ambulanceLng,
 
 const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route, style }) => {
   const webViewRef = useRef(null);
+  const iframeRef = useRef(null);
 
-  // Update ambulance position without re-rendering WebView
-  useEffect(() => {
-    if (ambulanceLocation && webViewRef.current) {
-      const message = JSON.stringify({
-        type: 'UPDATE_AMBULANCE',
-        lat: ambulanceLocation.lat,
-        lng: ambulanceLocation.lng,
-      });
-      webViewRef.current.postMessage(message);
-    }
-  }, [ambulanceLocation]);
-
-  const html = generateLeafletHTML({
+  // Memoize HTML so parent re-renders don't recreate the iframe/srcDoc and reset its state
+  const html = useMemo(() => generateLeafletHTML({
     victimLat: victimLocation?.lat || 19.076,
     victimLng: victimLocation?.lng || 72.8777,
+    // embed initial ambulance/hospital positions if available — but do NOT include ambulanceLocation in deps
     ambulanceLat: ambulanceLocation?.lat,
     ambulanceLng: ambulanceLocation?.lng,
     hospitalLat: hospitalLocation?.lat,
     hospitalLng: hospitalLocation?.lng,
     route: route || [],
-  });
+  }), [victimLocation, hospitalLocation, route]);
 
-  // Web platform: use iframe
+  // Update ambulance position without reloading iframe/WebView
+  useEffect(() => {
+    if (!ambulanceLocation) return;
+
+    const message = JSON.stringify({
+      type: 'UPDATE_AMBULANCE',
+      lat: ambulanceLocation.lat,
+      lng: ambulanceLocation.lng,
+    });
+
+    if (Platform.OS === 'web') {
+      try {
+        iframeRef.current?.contentWindow?.postMessage(message, '*');
+      } catch (e) {}
+    } else if (webViewRef.current) {
+      webViewRef.current.postMessage(message);
+    }
+  }, [ambulanceLocation]);
+
+  // Web platform: use iframe (keep srcDoc stable via memoized html)
   if (Platform.OS === 'web') {
     return (
       <iframe
+        ref={iframeRef}
         srcDoc={html}
         style={{ width: '100%', height: '100%', border: 'none', ...style }}
         title="map"

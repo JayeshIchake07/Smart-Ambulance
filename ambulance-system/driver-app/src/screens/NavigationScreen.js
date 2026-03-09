@@ -59,6 +59,18 @@ export default function NavigationScreen({ navigation, route }) {
     const coords = phase === 'to_victim' ? emergency.route : emergency.routeToHospital;
     if (!coords || coords.length === 0) return;
 
+    const getDistanceKm = (lat1, lon1, lat2, lon2) => {
+      const toRad = (d) => (d * Math.PI) / 180;
+      const R = 6371; // km
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    };
+
+    const targetLoc = phase === 'to_victim' ? emergency.victimLocation : emergency.hospital?.location;
+
     let idx = 0;
       intervalRef.current = setInterval(() => {
       idx = Math.min(idx + 1, coords.length - 1);
@@ -70,7 +82,12 @@ export default function NavigationScreen({ navigation, route }) {
       } else if (webViewRef.current) {
         webViewRef.current.postMessage(JSON.stringify({ type: 'MOVE', lat, lng }));
       }
-      setEta((prev) => Math.max(0, prev - 0.3));
+      // Recompute ETA from remaining straight-line distance to target assuming avg speed 40 km/h
+      if (targetLoc && typeof targetLoc.lat === 'number' && typeof targetLoc.lng === 'number') {
+        const distKm = getDistanceKm(lat, lng, targetLoc.lat, targetLoc.lng);
+        const etaMin = Math.max(1, Math.ceil((distKm / 40) * 60));
+        setEta(etaMin);
+      }
       if (idx >= coords.length - 1) clearInterval(intervalRef.current);
     }, 3000);
   };

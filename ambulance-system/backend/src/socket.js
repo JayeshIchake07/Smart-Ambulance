@@ -53,6 +53,8 @@ module.exports = (io) => {
     });
 
     // ── Driver sends live location ─────────────────────────────────────────
+    const { getDistance, getETA } = require('./utils/distance');
+
     socket.on('driver-location', async ({ lat, lng, emergencyId }) => {
       try {
         const emergency = await Emergency.findById(emergencyId);
@@ -64,12 +66,26 @@ module.exports = (io) => {
           'location.lng': lng,
         });
 
-        // Calculate rough ETA (simplified)
-        const eta = emergency.eta > 0 ? emergency.eta - 1 : 0;
+        // Recalculate ETA based on remaining straight-line distance to next target
+        let targetLat = emergency.victimLocation?.lat;
+        let targetLng = emergency.victimLocation?.lng;
+        if (emergency.status === 'patient_picked_up' || emergency.status === 'patient_picked_up') {
+          if (emergency.hospital && emergency.hospital.location) {
+            targetLat = emergency.hospital.location.lat;
+            targetLng = emergency.hospital.location.lng;
+          }
+        }
+
+        let eta = 0;
+        if (typeof targetLat === 'number' && typeof targetLng === 'number') {
+          const distKm = getDistance(lat, lng, targetLat, targetLng);
+          eta = getETA(distKm);
+        }
+
         emergency.eta = eta;
         await emergency.save();
 
-        // Broadcast to victim
+        // Broadcast to victim with updated ETA
         io.to(`user-${emergency.patient.toString()}`).emit('ambulance-location', {
           lat,
           lng,
