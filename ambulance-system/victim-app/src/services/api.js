@@ -1,12 +1,13 @@
 import axios from 'axios';
 import { io } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 // ⚠️ IMPORTANT: Change this to your PC's IPv4 address when testing on phone
 // Run `ipconfig` (Windows) or `ifconfig` (Mac/Linux) to get your IP
 // For Android emulator: use 10.0.2.2
 // For web browser: use localhost
-export const BASE_URL = 'http://192.168.29.145:5000';
+export const BASE_URL = Platform.OS === 'web' ? 'http://localhost:5000' : 'http://192.168.29.145:5000';
 
 // ── Axios instance ─────────────────────────────────────────────────────────
 const api = axios.create({

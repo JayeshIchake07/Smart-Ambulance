@@ -2,14 +2,20 @@ import React, { useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
   ScrollView, SafeAreaView, ActivityIndicator, Alert,
+  Dimensions, Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../services/api';
 import { colors, EMERGENCY_TYPES } from '../utils/constants';
+import LeafletMap from '../components/LeafletMap';
+
+const { height } = Dimensions.get('window');
 
 export default function EmergencyScreen({ navigation, route }) {
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showMap, setShowMap] = useState(false);
+  const [mapData, setMapData] = useState(null);
   const { location } = route.params || {};
 
   const handleSendHelp = async () => {
@@ -47,7 +53,8 @@ export default function EmergencyScreen({ navigation, route }) {
 
       const data = res.data;
 
-      navigation.replace('Tracking', {
+      // Show map with victim location, hospital, and route
+      setMapData({
         emergencyId: data.emergencyId,
         ambulance: data.ambulance,
         hospital: data.hospital,
@@ -58,12 +65,74 @@ export default function EmergencyScreen({ navigation, route }) {
         victimLocation: { lat, lng },
         userId,
       });
+      setShowMap(true);
+      setLoading(false);
     } catch (err) {
       Alert.alert('Dispatch Failed', err.response?.data?.message || err.message);
-    } finally {
       setLoading(false);
     }
   };
+
+  const handleContinueToTracking = () => {
+    navigation.replace('Tracking', mapData);
+  };
+
+  // Map overlay view
+  if (showMap && mapData) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.mapHeader}>
+          <Text style={styles.mapTitle}>🚑 Help is on the way!</Text>
+          <Text style={styles.mapSubtitle}>
+            Nearest hospital: {mapData.hospital?.name || 'Finding...'}
+          </Text>
+        </View>
+
+        <View style={styles.mapContainer}>
+          <LeafletMap
+            victimLocation={mapData.victimLocation}
+            ambulanceLocation={{
+              lat: mapData.ambulance?.location?.lat,
+              lng: mapData.ambulance?.location?.lng,
+            }}
+            hospitalLocation={{
+              lat: mapData.hospital?.location?.lat,
+              lng: mapData.hospital?.location?.lng,
+            }}
+            route={mapData.routeToHospital || mapData.route || []}
+            style={{ flex: 1 }}
+          />
+        </View>
+
+        <View style={styles.mapInfoCard}>
+          <View style={styles.mapInfoRow}>
+            <View style={styles.mapInfoItem}>
+              <Text style={styles.mapInfoLabel}>📍 Your Location</Text>
+              <Text style={styles.mapInfoValue}>
+                {mapData.victimLocation.lat.toFixed(4)}, {mapData.victimLocation.lng.toFixed(4)}
+              </Text>
+            </View>
+            <View style={styles.mapInfoItem}>
+              <Text style={styles.mapInfoLabel}>⏱️ ETA</Text>
+              <Text style={styles.mapInfoValue}>{mapData.eta || '~8'} min</Text>
+            </View>
+          </View>
+          <View style={styles.mapInfoRow}>
+            <View style={styles.mapInfoItem}>
+              <Text style={styles.mapInfoLabel}>🏥 Hospital</Text>
+              <Text style={styles.mapInfoValue} numberOfLines={1}>
+                {mapData.hospital?.name || 'Assigning...'}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <TouchableOpacity style={styles.continueBtn} onPress={handleContinueToTracking}>
+          <Text style={styles.continueText}>Track Ambulance Live →</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -227,4 +296,75 @@ const styles = StyleSheet.create({
   },
   sendEmoji: { fontSize: 22 },
   sendText: { color: '#fff', fontSize: 18, fontWeight: '800', letterSpacing: 0.5 },
+  // Map overlay styles
+  mapHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    alignItems: 'center',
+  },
+  mapTitle: {
+    color: colors.textPrimary,
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  mapSubtitle: {
+    color: colors.textSecondary,
+    fontSize: 14,
+  },
+  mapContainer: {
+    flex: 1,
+    borderRadius: 16,
+    overflow: 'hidden',
+    margin: 12,
+    borderWidth: 2,
+    borderColor: colors.border,
+  },
+  mapInfoCard: {
+    backgroundColor: colors.cardDark,
+    marginHorizontal: 12,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  mapInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  mapInfoItem: {
+    flex: 1,
+  },
+  mapInfoLabel: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  mapInfoValue: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  continueBtn: {
+    backgroundColor: colors.safe,
+    margin: 12,
+    borderRadius: 16,
+    padding: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.safe,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  continueText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
 });
