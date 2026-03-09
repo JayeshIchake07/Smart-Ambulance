@@ -8,7 +8,8 @@
     "react-scripts": "5.0.1",
     "axios": "^1.4.0",
     "socket.io-client": "^4.6.1",
-    "leaflet": "^1.9.4"
+    "leaflet": "^1.9.4",
+    "rapidaid-navigation-template": "file:../shared/navigation-template"
   },
   "scripts": {
     "start": "react-scripts start",
