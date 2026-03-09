@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   Dimensions, Alert, SafeAreaView,
+  Platform,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { getSocket } from '../services/api';
@@ -44,6 +45,7 @@ export default function NavigationScreen({ navigation, route }) {
   const [phase, setPhase] = useState('to_victim');
   const [eta, setEta] = useState(emergency.eta || 8);
   const webViewRef = useRef(null);
+  const iframeRef = useRef(null);
   const intervalRef = useRef(null);
 
   useEffect(() => {
@@ -58,11 +60,14 @@ export default function NavigationScreen({ navigation, route }) {
     if (!coords || coords.length === 0) return;
 
     let idx = 0;
-    intervalRef.current = setInterval(() => {
+      intervalRef.current = setInterval(() => {
       idx = Math.min(idx + 1, coords.length - 1);
       const [lat, lng] = coords[idx];
       socket.emit('driver-location', { lat, lng, emergencyId: emergency.emergencyId });
-      if (webViewRef.current) {
+      // Send MOVE updates to the embedded map. Use WebView on native and iframe on web.
+      if (Platform.OS === 'web') {
+        try { iframeRef.current?.contentWindow?.postMessage(JSON.stringify({ type: 'MOVE', lat, lng }), '*'); } catch (e) {}
+      } else if (webViewRef.current) {
         webViewRef.current.postMessage(JSON.stringify({ type: 'MOVE', lat, lng }));
       }
       setEta((prev) => Math.max(0, prev - 0.3));
@@ -102,14 +107,23 @@ export default function NavigationScreen({ navigation, route }) {
       {/* Map */}
       <View style={{ height: height * 0.54 }}>
         {startCoord && target ? (
-          <WebView
-            ref={webViewRef}
-            originWhitelist={['*']}
-            source={{ html: makeMapHTML(startCoord[0], startCoord[1], target.lat, target.lng, coords, tEmoji) }}
-            style={{ flex: 1 }}
-            javaScriptEnabled
-            scrollEnabled={false}
-          />
+          Platform.OS === 'web' ? (
+            <iframe
+              ref={iframeRef}
+              title="map"
+              srcDoc={makeMapHTML(startCoord[0], startCoord[1], target.lat, target.lng, coords, tEmoji)}
+              style={{ flex: 1, width: '100%', height: '100%', border: 0 }}
+            />
+          ) : (
+            <WebView
+              ref={webViewRef}
+              originWhitelist={['*']}
+              source={{ html: makeMapHTML(startCoord[0], startCoord[1], target.lat, target.lng, coords, tEmoji) }}
+              style={{ flex: 1 }}
+              javaScriptEnabled
+              scrollEnabled={false}
+            />
+          )
         ) : (
           <View style={[styles.mapPlaceholder]}>
             <Text style={{ color: C.gray, fontSize: 14 }}>Loading map...</Text>
