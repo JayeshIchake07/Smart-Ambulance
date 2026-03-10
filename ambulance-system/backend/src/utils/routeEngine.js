@@ -1,4 +1,13 @@
 const axios = require('axios');
+const path = require('path');
+const EtaModel = require('../ml/etaModel');
+
+// Try to load a trained ETA model (optional)
+try {
+  const modelPath = path.resolve(__dirname, '..', '..', 'data', 'eta_model.json');
+  EtaModel.load(modelPath);
+  if (EtaModel.model) console.log('ETA model loaded from', modelPath);
+} catch (e) {}
 
 /**
  * getRoute — calls OSRM public API
@@ -28,10 +37,25 @@ const getRoute = async (fromLat, fromLng, toLat, toLng) => {
     // GeoJSON coordinates are [lng, lat] — flip to [lat, lng] for Leaflet
     const coordinates = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
 
+    const distanceKm = parseFloat((distanceMeters / 1000).toFixed(2));
+    let durationMinutes = Math.ceil(durationSeconds / 60);
+
+    // If we have a trained ETA model, use it to predict duration (server-side prototype)
+    try {
+      if (EtaModel.model) {
+        const hour = new Date().getHours();
+        const dow = new Date().getDay();
+        const pred = EtaModel.predict(distanceKm, hour, dow);
+        if (pred && Number.isFinite(pred)) {
+          durationMinutes = Math.max(1, Math.round(pred));
+        }
+      }
+    } catch (e) {}
+
     return {
       coordinates, // [[lat, lng], ...]
-      durationMinutes: Math.ceil(durationSeconds / 60),
-      distanceKm: parseFloat((distanceMeters / 1000).toFixed(2)),
+      durationMinutes,
+      distanceKm,
     };
   } catch (err) {
     console.warn(`⚠️ OSRM failed (${err.message}), using straight-line fallback`);
@@ -39,10 +63,20 @@ const getRoute = async (fromLat, fromLng, toLat, toLng) => {
     // Fallback: straight line with 10 intermediate points
     const coordinates = generateStraightLine(fromLat, fromLng, toLat, toLng);
     const dist = haversineKm(fromLat, fromLng, toLat, toLng);
+    let durationMinutes = Math.ceil((dist / 40) * 60); // 40 km/h city speed
+
+    try {
+      if (EtaModel.model) {
+        const hour = new Date().getHours();
+        const dow = new Date().getDay();
+        const pred = EtaModel.predict(dist, hour, dow);
+        if (pred && Number.isFinite(pred)) durationMinutes = Math.max(1, Math.round(pred));
+      }
+    } catch (e) {}
 
     return {
       coordinates,
-      durationMinutes: Math.ceil((dist / 40) * 60), // 40 km/h city speed
+      durationMinutes,
       distanceKm: parseFloat(dist.toFixed(2)),
     };
   }
