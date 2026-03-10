@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { buildNavigationMapHtml } from 'rapidaid-navigation-template';
 
 const styles = {
@@ -49,25 +49,33 @@ function buildSubtitle(emergency, destinationLabel) {
 export default function HospitalNavigationMap({ emergency, hospitalLocation, hospitalName }) {
   const iframeRef = useRef(null);
   const hasInitializedRef = useRef(false);
-  const [mapHtml, setMapHtml] = useState('');
   const [mapReady, setMapReady] = useState(false);
 
   const currentPosition = emergency?.ambulanceLocation || hospitalLocation;
-  const destination = emergency?.status === 'patient_picked_up' || emergency?.status === 'arriving'
+  const isToHospital = emergency?.status === 'patient_picked_up' || emergency?.status === 'arriving';
+  const destination = isToHospital
     ? hospitalLocation
     : emergency?.victimLocation || hospitalLocation;
-  const destinationLabel = emergency?.status === 'patient_picked_up' || emergency?.status === 'arriving'
+  const destinationLabel = isToHospital
     ? hospitalName || 'Hospital'
     : 'Patient';
   const phaseLabel = getPhaseLabel(emergency, destinationLabel);
   const panelSubtitle = buildSubtitle(emergency, destinationLabel);
+  const routeCoordinates = useMemo(() => {
+    if (!emergency) {
+      return [];
+    }
 
-  const mapConfig = useMemo(() => {
+    const points = isToHospital ? emergency.routeToHospital : emergency.route;
+    return Array.isArray(points) && points.length > 1 ? points : [];
+  }, [emergency, isToHospital]);
+
+  const mapHtml = useMemo(() => {
     if (!currentPosition || !destination) {
       return null;
     }
 
-    return {
+    return buildNavigationMapHtml({
       startLat: currentPosition.lat,
       startLng: currentPosition.lng,
       destinationLat: destination.lat,
@@ -78,25 +86,33 @@ export default function HospitalNavigationMap({ emergency, hospitalLocation, hos
       panelSubtitle,
       markerVariant: 'arrow',
       hintText: 'Tap map to show navigation',
-    };
-  }, [currentPosition, destination, destinationLabel, panelSubtitle, phaseLabel]);
+      routeCoordinates,
+    });
+  }, [destination?.lat, destination?.lng, destinationLabel, panelSubtitle, phaseLabel, routeCoordinates]);
 
   useEffect(() => {
-    if (!mapConfig) {
+    if (!mapHtml) {
       return;
     }
 
-    setMapHtml(buildNavigationMapHtml(mapConfig));
     setMapReady(false);
     hasInitializedRef.current = false;
-  }, [emergency?.emergencyId, mapConfig]);
+  }, [emergency?.emergencyId, mapHtml]);
 
-  useEffect(() => {
-    if (!mapReady || !mapConfig || !iframeRef.current?.contentWindow) {
+  const postMessageToMap = useCallback((payload) => {
+    if (!iframeRef.current?.contentWindow) {
       return;
     }
 
-    const payload = {
+    iframeRef.current.contentWindow.postMessage(JSON.stringify(payload), '*');
+  }, []);
+
+  useEffect(() => {
+    if (!mapReady || !mapHtml) {
+      return;
+    }
+
+    postMessageToMap({
       type: hasInitializedRef.current ? 'UPDATE' : 'INIT',
       startLat: currentPosition.lat,
       startLng: currentPosition.lng,
@@ -107,17 +123,16 @@ export default function HospitalNavigationMap({ emergency, hospitalLocation, hos
       destinationLabel,
       panelSubtitle,
       etaLabel: emergency?.ambulanceETA ? `${emergency.ambulanceETA} min` : '',
-    };
-
-    iframeRef.current.contentWindow.postMessage(JSON.stringify(payload), '*');
+      routeCoordinates,
+    });
     hasInitializedRef.current = true;
-  }, [currentPosition, destination, destinationLabel, emergency?.ambulanceETA, mapReady, mapConfig, panelSubtitle, phaseLabel]);
+  }, [currentPosition?.lat, currentPosition?.lng, destination?.lat, destination?.lng, destinationLabel, emergency?.ambulanceETA, mapReady, mapHtml, panelSubtitle, phaseLabel, postMessageToMap, routeCoordinates]);
 
   if (!hospitalLocation) {
     return <div style={styles.empty}>Waiting for hospital location.</div>;
   }
 
-  if (!mapConfig) {
+  if (!mapHtml) {
     return <div style={styles.empty}>Waiting for an active ambulance route.</div>;
   }
 

@@ -101,6 +101,8 @@ router.post('/', protect, async (req, res) => {
       hospitalId: hospital._id,
       hospitalName: hospital.name,
       hospitalLocation: hospital.location,
+      route: routes.toVictim.coordinates,
+      routeToHospital: routes.toHospital.coordinates,
     });
 
     // ── 7. Respond to victim ──────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo, useState } from 'react';
+import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { buildNavigationMapHtml } from 'rapidaid-navigation-template';
@@ -26,8 +26,25 @@ const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route
   const panelSubtitle = isToHospital
     ? 'Your ambulance is taking the fastest route to the assigned hospital.'
     : 'Your ambulance is following the live route to your location.';
+  const routeCoordinates = Array.isArray(route) && route.length > 1 ? route : [];
+  const mapInstanceKey = useMemo(() => {
+    var first = routeCoordinates[0] || [];
+    var last = routeCoordinates[routeCoordinates.length - 1] || [];
+    return [
+      isToHospital ? 'hospital' : 'pickup',
+      currentPosition.lat,
+      currentPosition.lng,
+      destination.lat,
+      destination.lng,
+      routeCoordinates.length,
+      first[0],
+      first[1],
+      last[0],
+      last[1],
+    ].join('|');
+  }, [currentPosition.lat, currentPosition.lng, destination.lat, destination.lng, isToHospital, routeCoordinates]);
 
-  const mapConfig = useMemo(() => ({
+  const html = useMemo(() => buildNavigationMapHtml({
     startLat: currentPosition.lat,
     startLng: currentPosition.lng,
     destinationLat: destination.lat,
@@ -38,21 +55,35 @@ const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route
     panelSubtitle,
     markerVariant: 'arrow',
     hintText: 'Tap map to show navigation',
-  }), [currentPosition, destination, destinationLabel, panelSubtitle, phaseLabel]);
-
-  const html = useMemo(() => buildNavigationMapHtml(mapConfig), [mapConfig]);
+    routeCoordinates,
+  }), [destination.lat, destination.lng, destinationLabel, panelSubtitle, phaseLabel, routeCoordinates]);
 
   useEffect(() => {
     setMapReady(false);
     hasInitializedRef.current = false;
   }, [html]);
 
+  const sendPostMessage = useCallback((payload) => {
+    const message = JSON.stringify(payload);
+
+    if (Platform.OS === 'web') {
+      try {
+        iframeRef.current?.contentWindow?.postMessage(message, '*');
+      } catch (e) {}
+      return;
+    }
+
+    if (webViewRef.current) {
+      webViewRef.current.postMessage(message);
+    }
+  }, []);
+
   useEffect(() => {
     if (!mapReady) {
       return;
     }
 
-    const message = JSON.stringify({
+    sendPostMessage({
       type: hasInitializedRef.current ? 'UPDATE' : 'INIT',
       startLat: currentPosition.lat,
       startLng: currentPosition.lng,
@@ -63,22 +94,16 @@ const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route
       destinationLabel,
       panelSubtitle,
       etaLabel: eta ? `${Math.ceil(eta)} min` : '',
+      routeCoordinates,
     });
 
-    if (Platform.OS === 'web') {
-      try {
-        iframeRef.current?.contentWindow?.postMessage(message, '*');
-      } catch (e) {}
-    } else if (webViewRef.current) {
-      webViewRef.current.postMessage(message);
-    }
-
     hasInitializedRef.current = true;
-  }, [currentPosition, destination, destinationLabel, eta, mapReady, panelSubtitle, phaseLabel]);
+  }, [currentPosition.lat, currentPosition.lng, destination.lat, destination.lng, destinationLabel, eta, mapReady, panelSubtitle, phaseLabel, routeCoordinates, sendPostMessage]);
 
   if (Platform.OS === 'web') {
     return (
       <iframe
+        key={mapInstanceKey}
         ref={iframeRef}
         srcDoc={html}
         style={{ width: '100%', height: '100%', border: 'none', ...style }}
@@ -90,6 +115,7 @@ const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route
 
   return (
     <WebView
+      key={mapInstanceKey}
       ref={webViewRef}
       originWhitelist={['*']}
       source={{ html }}

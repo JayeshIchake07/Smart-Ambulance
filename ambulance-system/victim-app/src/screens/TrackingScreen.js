@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView,
-  Animated, TouchableOpacity, Dimensions,
+  Animated, TouchableOpacity, Dimensions, Platform,
 } from 'react-native';
 import LeafletMap from '../components/LeafletMap';
 import { getSocket } from '../services/api';
@@ -23,6 +23,7 @@ const STATUS_CONFIG = {
 export default function TrackingScreen({ navigation, route }) {
   const {
     emergencyId, ambulance, hospital, route: initRoute,
+    routeToHospital: initRouteToHospital,
     eta: initEta, emergencyType, victimLocation, userId,
   } = route.params;
 
@@ -33,6 +34,8 @@ export default function TrackingScreen({ navigation, route }) {
     lng: ambulance?.location?.lng,
   });
   const [currentRoute, setCurrentRoute] = useState(initRoute || []);
+  const [hospitalLocation, setHospitalLocation] = useState(hospital?.location);
+  const [liveVictimLocation, setLiveVictimLocation] = useState(victimLocation);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -73,6 +76,25 @@ export default function TrackingScreen({ navigation, route }) {
     socket.on('status-update', (data) => {
       if (data.emergencyId === emergencyId) {
         setStatus(data.status);
+        if (data.status === 'patient_picked_up') {
+          if (Array.isArray(data.routeToHospital) && data.routeToHospital.length > 1) {
+            setCurrentRoute(data.routeToHospital);
+          } else if (Array.isArray(initRouteToHospital) && initRouteToHospital.length > 1) {
+            setCurrentRoute(initRouteToHospital);
+          } else {
+            // Clear the old pickup route so the map can compute a fresh road path
+            // from the ambulance's current position to the hospital.
+            setCurrentRoute([]);
+          }
+
+          if (data.hospital?.location) {
+            setHospitalLocation(data.hospital.location);
+          }
+
+          if (data.eta !== undefined) {
+            setEta(data.eta);
+          }
+        }
       }
     });
 
@@ -93,19 +115,20 @@ export default function TrackingScreen({ navigation, route }) {
       socket.off('ambulance-location');
       socket.off('status-update');
       socket.off('help-complete');
-      // stop any location watchers
-      if (locationWatcher) {
-        locationWatcher.remove();
-        locationWatcher = null;
-      }
     };
-  }, [emergencyId]);
+  }, [emergencyId, emergencyType, ambulance, hospital, initEta, initRouteToHospital, navigation]);
 
   // live victim location publishing
   useEffect(() => {
-    let watcher = null;
-    let locationWatcherStarted = false;
+    let expoWatcher = null;
+    let browserWatchId = null;
     const socket = getSocket();
+
+    const handleCoords = (coords) => {
+      const nextCoords = { lat: coords.latitude, lng: coords.longitude };
+      setLiveVictimLocation(nextCoords);
+      socket.emit('patient-location', { ...nextCoords, emergencyId });
+    };
 
     const start = async () => {
       try {
@@ -113,18 +136,21 @@ export default function TrackingScreen({ navigation, route }) {
         if (status !== 'granted') return;
 
         const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        // inform server of initial position
-        socket.emit('patient-location', { lat: pos.coords.latitude, lng: pos.coords.longitude, emergencyId });
+        handleCoords(pos.coords);
 
-        watcher = await Location.watchPositionAsync(
+        if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.geolocation) {
+          browserWatchId = navigator.geolocation.watchPosition(
+            (position) => handleCoords(position.coords),
+            () => {},
+            { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
+          );
+          return;
+        }
+
+        expoWatcher = await Location.watchPositionAsync(
           { accuracy: Location.Accuracy.Highest, timeInterval: 3000, distanceInterval: 2 },
-          (position) => {
-            socket.emit('patient-location', { lat: position.coords.latitude, lng: position.coords.longitude, emergencyId });
-            // update local map victim location
-            // not changing state.victimLocation here — server will broadcast back if needed
-          }
+          (position) => handleCoords(position.coords)
         );
-        locationWatcherStarted = true;
       } catch (err) {
         // ignore
       }
@@ -133,7 +159,13 @@ export default function TrackingScreen({ navigation, route }) {
     start();
 
     return () => {
-      if (watcher) watcher.remove();
+      if (browserWatchId !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(browserWatchId);
+      }
+
+      if (expoWatcher && typeof expoWatcher.remove === 'function') {
+        expoWatcher.remove();
+      }
     };
   }, [emergencyId]);
 
@@ -144,9 +176,9 @@ export default function TrackingScreen({ navigation, route }) {
       {/* MAP — top 52% */}
       <View style={{ height: MAP_HEIGHT }}>
         <LeafletMap
-          victimLocation={victimLocation}
+          victimLocation={liveVictimLocation}
           ambulanceLocation={ambulanceLocation}
-          hospitalLocation={hospital?.location}
+          hospitalLocation={hospitalLocation}
           route={currentRoute}
           status={status}
           eta={eta}

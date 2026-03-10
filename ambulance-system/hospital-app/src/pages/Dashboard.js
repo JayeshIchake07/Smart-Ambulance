@@ -106,6 +106,10 @@ const TYPE_EMOJIS = {
   Breathing: '🫁', Injury: '🩹', Unknown: '🆘',
 };
 
+const pickRoute = (nextRoute, currentRoute) => (
+  Array.isArray(nextRoute) && nextRoute.length > 1 ? nextRoute : currentRoute || []
+);
+
 // ── Main Dashboard ─────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [emergencies, setEmergencies] = useState([]);
@@ -161,6 +165,8 @@ export default function Dashboard() {
         return [{
           ...data,
           patientType: data.patientType || data.emergencyType || 'Unknown',
+          route: data.route || [],
+          routeToHospital: data.routeToHospital || [],
           receivedAt: new Date(),
         }, ...prev];
       });
@@ -181,6 +187,8 @@ export default function Dashboard() {
                 hospitalId: data.hospitalId || e.hospitalId,
                 hospitalLocation: data.hospitalLocation || e.hospitalLocation,
                 victimLocation: data.victimLocation || e.victimLocation,
+                route: pickRoute(data.route, e.route),
+                routeToHospital: pickRoute(data.routeToHospital, e.routeToHospital),
               }
             : e
         )
@@ -201,6 +209,8 @@ export default function Dashboard() {
                 hospitalName: data.hospitalName || e.hospitalName,
                 hospitalLocation: data.hospitalLocation || e.hospitalLocation,
                 victimLocation: data.victimLocation || e.victimLocation,
+                route: pickRoute(data.route, e.route),
+                routeToHospital: pickRoute(data.routeToHospital, e.routeToHospital),
                 ambulance: data.ambulance || e.ambulance,
               }
             : e

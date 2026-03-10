@@ -9,7 +9,7 @@ const axios = require('axios');
 const getRoute = async (fromLat, fromLng, toLat, toLng) => {
   try {
     // OSRM public demo server (free, no API key)
-    const url = `http://router.project-osrm.org/route/v1/driving/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson`;
+    const url = `https://router.project-osrm.org/route/v1/driving/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson`;
 
     const response = await axios.get(url, { timeout: 8000 });
 

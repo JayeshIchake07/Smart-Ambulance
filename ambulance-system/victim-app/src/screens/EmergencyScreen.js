@@ -17,6 +17,7 @@ export default function EmergencyScreen({ navigation, route }) {
   const [showMap, setShowMap] = useState(false);
   const [mapData, setMapData] = useState(null);
   const { location } = route.params || {};
+  const previewRoute = mapData?.route || [];
 
   const handleSendHelp = async () => {
     if (!selected) {
@@ -99,7 +100,9 @@ export default function EmergencyScreen({ navigation, route }) {
               lat: mapData.hospital?.location?.lat,
               lng: mapData.hospital?.location?.lng,
             }}
-            route={mapData.routeToHospital || mapData.route || []}
+            route={previewRoute}
+            status="driver_accepted"
+            eta={mapData.eta}
             style={{ flex: 1 }}
           />
         </View>

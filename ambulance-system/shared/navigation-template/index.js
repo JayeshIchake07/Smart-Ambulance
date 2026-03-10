@@ -389,7 +389,7 @@ function buildNavigationMapHtml(options = {}) {
 
     <div class="summary-grid">
       <div class="summary-card">
-        <span class="summary-label">Distance</span>
+        <span class="summary-label">Distance </span>
         <strong id="distance">Calculating...</strong>
       </div>
       <div class="summary-card">
@@ -538,6 +538,13 @@ function buildNavigationMapHtml(options = {}) {
       return true;
     }
 
+    function clearStaticRoute() {
+      if (routeLine) {
+        map.removeLayer(routeLine);
+        routeLine = null;
+      }
+    }
+
     function calculateBearing(from, to) {
       var lat1 = toRadians(from.lat);
       var lat2 = toRadians(to.lat);
@@ -599,6 +606,69 @@ function buildNavigationMapHtml(options = {}) {
     // ── Route initialisation ─────────────────────────────────────────────────
     var routingControl = null;
 
+    function ensureRoutingControl() {
+      if (routingControl) {
+        return routingControl;
+      }
+
+      routingControl = L.Routing.control({
+        waypoints: [state.currentPosition, state.destination],
+        addWaypoints: false,
+        draggableWaypoints: false,
+        fitSelectedRoutes: false,
+        showAlternatives: false,
+        createMarker: function() { return null; },
+        lineOptions: { styles: [], addWaypoints: false },
+        router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1', timeout: 12000 })
+      }).addTo(map);
+
+      routingControl.on('routesfound', function(event) {
+        var route = event.routes && event.routes[0];
+        if (!route) return;
+
+        var coords = [];
+        try {
+          coords = (route.coordinates || []).map(function(c) {
+            if (c && typeof c.lat === 'number') return L.latLng(c.lat, c.lng);
+            if (Array.isArray(c) && c.length >= 2) return L.latLng(c[0], c[1]);
+            return null;
+          }).filter(Boolean);
+        } catch (e) {}
+
+        if (coords.length > 1) {
+          state.routeCoordinates = coords;
+          renderStaticRoute(false);
+
+          try {
+            var cacheKey = 'route:' + state.currentPosition.lat.toFixed(4) + ',' + state.currentPosition.lng.toFixed(4) + '|' + state.destination.lat.toFixed(4) + ',' + state.destination.lng.toFixed(4);
+            sessionStorage.setItem(cacheKey, JSON.stringify(coords.map(function(p) { return [p.lat, p.lng]; })));
+          } catch (e) {}
+        } else {
+          try {
+            var dist = (route.summary && route.summary.totalDistance) || 0;
+            var time = (route.summary && route.summary.totalTime) || 0;
+            if (dist) distanceEl.textContent = formatDistance(dist);
+            if (time) etaEl.textContent = state.etaLabel || formatDuration(time);
+          } catch (e) {}
+          renderInstructions(route.instructions || []);
+        }
+      });
+
+      routingControl.on('routingerror', function() {
+        var fallback = [];
+        var segs = 20;
+        var fa = state.currentPosition, fb = state.destination;
+        for (var fi = 0; fi <= segs; fi++) {
+          fallback.push(L.latLng(fa.lat + (fb.lat - fa.lat) * fi / segs, fa.lng + (fb.lng - fa.lng) * fi / segs));
+        }
+        state.routeCoordinates = fallback;
+        renderStaticRoute(true);
+        renderInstructions([{ text: 'Approximate route (OSRM unavailable)', distance: getRemainingRouteDistanceMeters(fallback, state.currentPosition) }]);
+      });
+
+      return routingControl;
+    }
+
     // 1. Use backend-supplied route coordinates immediately (no OSRM needed)
     if (state.routeCoordinates.length > 1) {
       renderStaticRoute(true);
@@ -620,64 +690,7 @@ function buildNavigationMapHtml(options = {}) {
 
       // 3. Last resort: OSRM routing control
       if (!didUseCached) {
-        routingControl = L.Routing.control({
-          waypoints: [state.currentPosition, state.destination],
-          addWaypoints: false,
-          draggableWaypoints: false,
-          fitSelectedRoutes: false,
-          showAlternatives: false,
-          createMarker: function() { return null; },
-          lineOptions: { styles: [], addWaypoints: false },
-          router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1', timeout: 12000 })
-        }).addTo(map);
-
-        routingControl.on('routesfound', function(event) {
-          var route = event.routes && event.routes[0];
-          if (!route) return;
-
-          // Build LatLng array from route coordinates
-          var coords = [];
-          try {
-            coords = (route.coordinates || []).map(function(c) {
-              if (c && typeof c.lat === 'number') return L.latLng(c.lat, c.lng);
-              if (Array.isArray(c) && c.length >= 2) return L.latLng(c[0], c[1]);
-              return null;
-            }).filter(Boolean);
-          } catch (e) {}
-
-          if (coords.length > 1) {
-            state.routeCoordinates = coords;
-            renderStaticRoute(false);
-
-            // Cache for future loads
-            try {
-              var cacheKey = 'route:' + state.currentPosition.lat.toFixed(4) + ',' + state.currentPosition.lng.toFixed(4) + '|' + state.destination.lat.toFixed(4) + ',' + state.destination.lng.toFixed(4);
-              sessionStorage.setItem(cacheKey, JSON.stringify(coords.map(function(p) { return [p.lat, p.lng]; })));
-            } catch (e) {}
-          } else {
-            // No usable coords from OSRM — compute from summary
-            try {
-              var dist = (route.summary && route.summary.totalDistance) || 0;
-              var time = (route.summary && route.summary.totalTime) || 0;
-              if (dist) distanceEl.textContent = formatDistance(dist);
-              if (time) etaEl.textContent = state.etaLabel || formatDuration(time);
-            } catch (e) {}
-            renderInstructions(route.instructions || []);
-          }
-        });
-
-        routingControl.on('routingerror', function() {
-          // Straight-line fallback so distance/ETA show immediately
-          var fallback = [];
-          var segs = 20;
-          var fa = state.currentPosition, fb = state.destination;
-          for (var fi = 0; fi <= segs; fi++) {
-            fallback.push(L.latLng(fa.lat + (fb.lat - fa.lat) * fi / segs, fa.lng + (fb.lng - fa.lng) * fi / segs));
-          }
-          state.routeCoordinates = fallback;
-          renderStaticRoute(true);
-          renderInstructions([{ text: 'Approximate route (OSRM unavailable)', distance: getRemainingRouteDistanceMeters(fallback, state.currentPosition) }]);
-        });
+        ensureRoutingControl();
       }
     }
 
@@ -713,6 +726,8 @@ function buildNavigationMapHtml(options = {}) {
     }
 
     function updateMap(payload, shouldAnimate) {
+      var destinationChanged = false;
+
       if (typeof payload.startLat === 'number' && typeof payload.startLng === 'number') {
         var nextPosition = L.latLng(payload.startLat, payload.startLng);
         if (shouldAnimate) {
@@ -725,6 +740,9 @@ function buildNavigationMapHtml(options = {}) {
       }
 
       if (typeof payload.destinationLat === 'number' && typeof payload.destinationLng === 'number') {
+        destinationChanged =
+          Math.abs(state.destination.lat - payload.destinationLat) > 0.00001 ||
+          Math.abs(state.destination.lng - payload.destinationLng) > 0.00001;
         state.destination = L.latLng(payload.destinationLat, payload.destinationLng);
       }
 
@@ -758,6 +776,11 @@ function buildNavigationMapHtml(options = {}) {
 
       setHeaderContent();
 
+      if (destinationChanged) {
+        clearStaticRoute();
+        state.routeCoordinates = [];
+      }
+
       // Update route display
       if (Array.isArray(payload.routeCoordinates) && payload.routeCoordinates.length > 1) {
         // Fresh route coordinates from backend — just render them, no OSRM
@@ -767,10 +790,13 @@ function buildNavigationMapHtml(options = {}) {
           return null;
         }).filter(Boolean);
         renderStaticRoute(false);
-      } else if (state.routeCoordinates.length > 1) {
+      } else if (state.routeCoordinates.length > 1 && !destinationChanged) {
         renderStaticRoute(false);
-      } else if (routingControl && typeof routingControl.setWaypoints === 'function') {
-        routingControl.setWaypoints([state.currentPosition, state.destination]);
+      } else {
+        ensureRoutingControl();
+        if (routingControl && typeof routingControl.setWaypoints === 'function') {
+          routingControl.setWaypoints([state.currentPosition, state.destination]);
+        }
       }
 
       if (state.etaLabel) {

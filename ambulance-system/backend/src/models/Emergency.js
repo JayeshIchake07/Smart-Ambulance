@@ -41,7 +41,12 @@ const emergencySchema = new mongoose.Schema(
       lng: { type: Number, required: true },
     },
     route: {
-      // Array of [lat, lng] coordinates from OSRM
+      // Array of [lat, lng] coordinates from OSRM (ambulance -> victim)
+      type: [[Number]],
+      default: [],
+    },
+    routeToHospital: {
+      // Array of [lat, lng] coordinates from OSRM (victim -> hospital)
       type: [[Number]],
       default: [],
     },

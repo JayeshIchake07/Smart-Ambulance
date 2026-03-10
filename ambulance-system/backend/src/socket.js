@@ -1,5 +1,6 @@
 const Emergency = require('./models/Emergency');
 const Ambulance = require('./models/Ambulance');
+const { getRoute } = require('./utils/routeEngine');
 
 // Map: userId → socketId
 const userSockets = {};
@@ -107,6 +108,8 @@ module.exports = (io) => {
             hospitalName: emergency.hospital.name,
             hospitalLocation: emergency.hospital.location,
             victimLocation: emergency.victimLocation,
+            route: emergency.route || [],
+            routeToHospital: emergency.routeToHospital || [],
             ambulance: emergency.ambulance
               ? {
                   id: emergency.ambulance._id,
@@ -163,8 +166,29 @@ module.exports = (io) => {
 
         if (!emergency) return;
 
+        let pickupRoute = null;
+        if (
+          emergency.ambulance?.location &&
+          emergency.hospital?.location &&
+          typeof emergency.ambulance.location.lat === 'number' &&
+          typeof emergency.ambulance.location.lng === 'number' &&
+          typeof emergency.hospital.location.lat === 'number' &&
+          typeof emergency.hospital.location.lng === 'number'
+        ) {
+          pickupRoute = await getRoute(
+            emergency.ambulance.location.lat,
+            emergency.ambulance.location.lng,
+            emergency.hospital.location.lat,
+            emergency.hospital.location.lng
+          );
+        }
+
         emergency.status = 'patient_picked_up';
         emergency.pickedUpAt = new Date();
+        if (pickupRoute) {
+          emergency.routeToHospital = pickupRoute.coordinates;
+          emergency.eta = pickupRoute.durationMinutes;
+        }
         await emergency.save();
 
         // Notify victim
@@ -175,7 +199,10 @@ module.exports = (io) => {
           hospital: {
             name: emergency.hospital.name,
             address: emergency.hospital.address,
+            location: emergency.hospital.location,
           },
+          routeToHospital: emergency.routeToHospital || [],
+          eta: emergency.eta,
         });
 
         // Notify hospital
@@ -192,6 +219,8 @@ module.exports = (io) => {
           hospitalName: emergency.hospital.name,
           hospitalLocation: emergency.hospital.location,
           victimLocation: emergency.victimLocation,
+          route: emergency.route || [],
+          routeToHospital: emergency.routeToHospital || [],
         });
 
         console.log(`🏥 Patient picked up for emergency: ${emergencyId}`);
