@@ -48,6 +48,7 @@ function buildNavigationMapHtml(options = {}) {
     panelSubtitle = '',
     markerVariant = 'ambulance',
     hintText = 'Tap map to show navigation',
+    routeCoordinates = [],
   } = options;
 
   const safeTitle = escapeHtml(title);
@@ -56,6 +57,19 @@ function buildNavigationMapHtml(options = {}) {
   const safePanelSubtitle = escapeHtml(panelSubtitle);
   const safeHintText = escapeHtml(hintText);
   const vehicleMarkerHtmlLiteral = JSON.stringify(buildVehicleMarkerHtml(markerVariant));
+  const routeCoordinatesLiteral = JSON.stringify(
+    Array.isArray(routeCoordinates)
+      ? routeCoordinates
+          .map((point) => {
+            if (!Array.isArray(point) || point.length < 2) return null;
+            const lat = Number(point[0]);
+            const lng = Number(point[1]);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+            return [lat, lng];
+          })
+          .filter(Boolean)
+      : []
+  );
 
   return `<!DOCTYPE html>
 <html>
@@ -403,6 +417,7 @@ function buildNavigationMapHtml(options = {}) {
       phaseLabel: '${safePhaseLabel}',
       panelSubtitle: '${safePanelSubtitle}',
       etaLabel: '',
+      routeCoordinates: (${routeCoordinatesLiteral} || []).map(function(p) { return L.latLng(p[0], p[1]); }),
     };
 
     var map = L.map('map', { zoomControl: true, preferCanvas: true }).setView(state.currentPosition, 14);
@@ -460,6 +475,67 @@ function buildNavigationMapHtml(options = {}) {
 
     function toRadians(value) {
       return (value * Math.PI) / 180;
+    }
+
+    // ── route helpers (defined before use) ──────────────────────────────────
+    var routeLine = null;
+
+    function calculateDistanceMeters(a, b) {
+      var radiusMeters = 6371000;
+      var deltaLat = toRadians(b.lat - a.lat);
+      var deltaLng = toRadians(b.lng - a.lng);
+      var lat1 = toRadians(a.lat);
+      var lat2 = toRadians(b.lat);
+      var aa = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2);
+      var c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
+      return radiusMeters * c;
+    }
+
+    function getNearestRouteIndex(routePoints, currentPoint) {
+      if (!routePoints || !routePoints.length) return -1;
+      var nearestIndex = 0;
+      var nearestDistance = Number.POSITIVE_INFINITY;
+      routePoints.forEach(function(point, index) {
+        var d = calculateDistanceMeters(currentPoint, point);
+        if (d < nearestDistance) { nearestDistance = d; nearestIndex = index; }
+      });
+      return nearestIndex;
+    }
+
+    function getRemainingRouteDistanceMeters(routePoints, currentPoint) {
+      if (!routePoints || !routePoints.length) {
+        return calculateDistanceMeters(currentPoint, state.destination);
+      }
+      var nearestIndex = getNearestRouteIndex(routePoints, currentPoint);
+      if (nearestIndex < 0) return calculateDistanceMeters(currentPoint, state.destination);
+      var total = calculateDistanceMeters(currentPoint, routePoints[nearestIndex]);
+      for (var i = nearestIndex; i < routePoints.length - 1; i += 1) {
+        total += calculateDistanceMeters(routePoints[i], routePoints[i + 1]);
+      }
+      return total;
+    }
+
+    function renderStaticRoute(shouldFitBounds) {
+      if (!state.routeCoordinates || !state.routeCoordinates.length) return false;
+
+      if (!routeLine) {
+        routeLine = L.polyline(state.routeCoordinates, {
+          color: '#10b981', weight: 8, opacity: 0.96,
+          lineCap: 'round', lineJoin: 'round',
+        }).addTo(map);
+      } else {
+        routeLine.setLatLngs(state.routeCoordinates);
+      }
+
+      if (shouldFitBounds) {
+        map.fitBounds(routeLine.getBounds(), { padding: [36, 36], animate: false });
+      }
+
+      var remaining = getRemainingRouteDistanceMeters(state.routeCoordinates, state.currentPosition);
+      distanceEl.textContent = formatDistance(remaining);
+      etaEl.textContent = state.etaLabel || formatDuration((remaining / 1000 / 40) * 3600);
+      renderInstructions([{ text: 'Continue toward ' + state.destinationLabel, distance: remaining }]);
+      return true;
     }
 
     function calculateBearing(from, to) {
@@ -520,48 +596,90 @@ function buildNavigationMapHtml(options = {}) {
     var vehicleMarker = L.marker(state.currentPosition, { icon: vehicleIcon, zIndexOffset: 1000 }).addTo(map);
     var targetMarker = L.marker(state.destination, { icon: destinationIcon }).addTo(map);
 
-    var routingControl = L.Routing.control({
-      waypoints: [state.currentPosition, state.destination],
-      addWaypoints: false,
-      draggableWaypoints: false,
-      fitSelectedRoutes: true,
-      showAlternatives: false,
-      createMarker: function() { return null; },
-      lineOptions: {
-        styles: [
-          { color: '#34d399', opacity: 0.18, weight: 16 },
-          { color: '#10b981', opacity: 0.96, weight: 8 },
-          { color: '#ffffff', opacity: 0.82, weight: 2 }
-        ],
-        extendToWaypoints: true,
-        missingRouteTolerance: 0,
-      },
-      router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' })
-    }).addTo(map);
+    // ── Route initialisation ─────────────────────────────────────────────────
+    var routingControl = null;
 
-    routingControl.on('routesfound', function(event) {
-      var route = event.routes[0];
-      if (!route) {
-        return;
-      }
-      distanceEl.textContent = formatDistance(route.summary.totalDistance);
-      etaEl.textContent = state.etaLabel || formatDuration(route.summary.totalTime);
-      renderInstructions(route.instructions || []);
-        // Cache the route for next time (sessionStorage) using rounded start/dest
-        try {
-          var cacheKey = 'route:' + state.currentPosition.lat.toFixed(6) + ',' + state.currentPosition.lng.toFixed(6) + '|' + state.destination.lat.toFixed(6) + ',' + state.destination.lng.toFixed(6);
-          if (Array.isArray(route.coordinates) && route.coordinates.length) {
-            var cacheArray = route.coordinates.map(function(c) { return [c.lat !== undefined ? c.lat : c[1], c.lng !== undefined ? c.lng : c[0]]; });
-            sessionStorage.setItem(cacheKey, JSON.stringify(cacheArray));
+    // 1. Use backend-supplied route coordinates immediately (no OSRM needed)
+    if (state.routeCoordinates.length > 1) {
+      renderStaticRoute(true);
+    } else {
+      // 2. Fall back to sessionStorage cache
+      var didUseCached = false;
+      try {
+        var cacheKeyInit = 'route:' + state.currentPosition.lat.toFixed(4) + ',' + state.currentPosition.lng.toFixed(4) + '|' + state.destination.lat.toFixed(4) + ',' + state.destination.lng.toFixed(4);
+        var cachedInit = sessionStorage.getItem(cacheKeyInit);
+        if (cachedInit) {
+          var parsedInit = JSON.parse(cachedInit);
+          if (Array.isArray(parsedInit) && parsedInit.length > 1) {
+            state.routeCoordinates = parsedInit.map(function(p) { return L.latLng(p[0], p[1]); });
+            renderStaticRoute(true);
+            didUseCached = true;
           }
-        } catch (e) {}
-    });
+        }
+      } catch (e) {}
 
-    routingControl.on('routingerror', function() {
-      distanceEl.textContent = 'Route unavailable';
-      etaEl.textContent = state.etaLabel || 'Unavailable';
-      instructionsEl.innerHTML = '<li>Routing service is currently unavailable.</li>';
-    });
+      // 3. Last resort: OSRM routing control
+      if (!didUseCached) {
+        routingControl = L.Routing.control({
+          waypoints: [state.currentPosition, state.destination],
+          addWaypoints: false,
+          draggableWaypoints: false,
+          fitSelectedRoutes: false,
+          showAlternatives: false,
+          createMarker: function() { return null; },
+          lineOptions: { styles: [], addWaypoints: false },
+          router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1', timeout: 12000 })
+        }).addTo(map);
+
+        routingControl.on('routesfound', function(event) {
+          var route = event.routes && event.routes[0];
+          if (!route) return;
+
+          // Build LatLng array from route coordinates
+          var coords = [];
+          try {
+            coords = (route.coordinates || []).map(function(c) {
+              if (c && typeof c.lat === 'number') return L.latLng(c.lat, c.lng);
+              if (Array.isArray(c) && c.length >= 2) return L.latLng(c[0], c[1]);
+              return null;
+            }).filter(Boolean);
+          } catch (e) {}
+
+          if (coords.length > 1) {
+            state.routeCoordinates = coords;
+            renderStaticRoute(false);
+
+            // Cache for future loads
+            try {
+              var cacheKey = 'route:' + state.currentPosition.lat.toFixed(4) + ',' + state.currentPosition.lng.toFixed(4) + '|' + state.destination.lat.toFixed(4) + ',' + state.destination.lng.toFixed(4);
+              sessionStorage.setItem(cacheKey, JSON.stringify(coords.map(function(p) { return [p.lat, p.lng]; })));
+            } catch (e) {}
+          } else {
+            // No usable coords from OSRM — compute from summary
+            try {
+              var dist = (route.summary && route.summary.totalDistance) || 0;
+              var time = (route.summary && route.summary.totalTime) || 0;
+              if (dist) distanceEl.textContent = formatDistance(dist);
+              if (time) etaEl.textContent = state.etaLabel || formatDuration(time);
+            } catch (e) {}
+            renderInstructions(route.instructions || []);
+          }
+        });
+
+        routingControl.on('routingerror', function() {
+          // Straight-line fallback so distance/ETA show immediately
+          var fallback = [];
+          var segs = 20;
+          var fa = state.currentPosition, fb = state.destination;
+          for (var fi = 0; fi <= segs; fi++) {
+            fallback.push(L.latLng(fa.lat + (fb.lat - fa.lat) * fi / segs, fa.lng + (fb.lng - fa.lng) * fi / segs));
+          }
+          state.routeCoordinates = fallback;
+          renderStaticRoute(true);
+          renderInstructions([{ text: 'Approximate route (OSRM unavailable)', distance: getRemainingRouteDistanceMeters(fallback, state.currentPosition) }]);
+        });
+      }
+    }
 
     function animateTo(nextLat, nextLng) {
       var from = vehicleMarker.getLatLng();
@@ -639,7 +757,22 @@ function buildNavigationMapHtml(options = {}) {
       }));
 
       setHeaderContent();
-      routingControl.setWaypoints([state.currentPosition, state.destination]);
+
+      // Update route display
+      if (Array.isArray(payload.routeCoordinates) && payload.routeCoordinates.length > 1) {
+        // Fresh route coordinates from backend — just render them, no OSRM
+        state.routeCoordinates = payload.routeCoordinates.map(function(p) {
+          if (Array.isArray(p)) return L.latLng(p[0], p[1]);
+          if (p && typeof p.lat === 'number') return L.latLng(p.lat, p.lng);
+          return null;
+        }).filter(Boolean);
+        renderStaticRoute(false);
+      } else if (state.routeCoordinates.length > 1) {
+        renderStaticRoute(false);
+      } else if (routingControl && typeof routingControl.setWaypoints === 'function') {
+        routingControl.setWaypoints([state.currentPosition, state.destination]);
+      }
+
       if (state.etaLabel) {
         etaEl.textContent = state.etaLabel;
       }
