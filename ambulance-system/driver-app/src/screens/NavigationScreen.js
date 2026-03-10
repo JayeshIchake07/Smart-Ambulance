@@ -69,6 +69,27 @@ export default function NavigationScreen({ navigation, route }) {
   const destinationLabel = isToVictim ? 'Victim Location' : emergency.hospital?.name || 'Hospital';
   const phaseLabel = isToVictim ? 'Heading to Victim' : 'Heading to Hospital';
   const panelSubtitle = `Following the best route to ${destinationLabel.toLowerCase()} with live ambulance tracking.`;
+  const routeCoordinates = useMemo(
+    () => (Array.isArray(coords)
+      ? coords
+          .map((point) => {
+            if (!Array.isArray(point) || point.length < 2) {
+              return null;
+            }
+
+            const lat = Number(point[0]);
+            const lng = Number(point[1]);
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+              return null;
+            }
+
+            return [lat, lng];
+          })
+          .filter(Boolean)
+      : []),
+    [coords]
+  );
 
   const mapConfig = useMemo(() => {
     const fallbackPoint = initialRoutePoint(emergency);
@@ -90,8 +111,9 @@ export default function NavigationScreen({ navigation, route }) {
       panelSubtitle,
       markerVariant: 'arrow',
       hintText: 'Tap map to show navigation',
+      routeCoordinates,
     };
-  }, [currentPosition, destinationLabel, emergency, panelSubtitle, phaseLabel, target]);
+  }, [currentPosition, destinationLabel, emergency, panelSubtitle, phaseLabel, routeCoordinates, target]);
 
   useEffect(() => {
     if (!mapConfig) {
@@ -127,10 +149,11 @@ export default function NavigationScreen({ navigation, route }) {
       destinationLabel,
       panelSubtitle,
       etaLabel: `${Math.ceil(eta)} min`,
+      routeCoordinates,
     });
 
     hasInitializedRef.current = true;
-  }, [destinationLabel, eta, mapConfig, mapReady, panelSubtitle, phaseLabel]);
+  }, [destinationLabel, eta, mapConfig, mapReady, panelSubtitle, phaseLabel, routeCoordinates]);
 
   const postMapMessage = (payload) => {
     const message = JSON.stringify(payload);
@@ -195,6 +218,7 @@ export default function NavigationScreen({ navigation, route }) {
         destinationLabel,
         panelSubtitle,
         etaLabel: `${nextEta} min`,
+        routeCoordinates,
       });
       hasInitializedRef.current = true;
     }

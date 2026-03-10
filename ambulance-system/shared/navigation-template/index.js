@@ -409,6 +409,14 @@ function buildNavigationMapHtml(options = {}) {
   </aside>
 
   <script>
+    var ROUTE_BASE_COLOR = '#007AFF';
+    var SIGNAL_WAVE_COLOR = '#34C759';
+    var SIGNAL_WAVE_OPACITY = 0.9;
+    var SIGNAL_WAVE_REPEAT_MS = 9000;
+    var SIGNAL_WAVE_ACTIVE_MS = 1400;
+    var SIGNAL_WAVE_FADE_MS = 600;
+    var SIGNAL_WAVE_SEGMENT_SIZE = 8;
+
     var state = {
       currentPosition: L.latLng(${Number(startLat)}, ${Number(startLng)}),
       destination: L.latLng(${Number(destinationLat)}, ${Number(destinationLng)}),
@@ -479,6 +487,11 @@ function buildNavigationMapHtml(options = {}) {
 
     // ── route helpers (defined before use) ──────────────────────────────────
     var routeLine = null;
+    var signalWaveInterval = null;
+    var signalWaveTimeouts = [];
+    var signalWaveLayers = [];
+    var signalWaveFrames = [];
+    var signalWaveRouteKey = '';
 
     function calculateDistanceMeters(a, b) {
       var radiusMeters = 6371000;
@@ -515,20 +528,153 @@ function buildNavigationMapHtml(options = {}) {
       return total;
     }
 
+    function routeKeyFromPoints(routePoints) {
+      if (!routePoints || routePoints.length < 2) return '';
+
+      var first = routePoints[0];
+      var last = routePoints[routePoints.length - 1];
+      return [
+        routePoints.length,
+        first.lat.toFixed(5),
+        first.lng.toFixed(5),
+        last.lat.toFixed(5),
+        last.lng.toFixed(5)
+      ].join(':');
+    }
+
+    function clearSignalWavePass() {
+      signalWaveTimeouts.forEach(function(timeoutId) {
+        clearTimeout(timeoutId);
+      });
+      signalWaveTimeouts = [];
+
+      signalWaveFrames.forEach(function(frameId) {
+        cancelAnimationFrame(frameId);
+      });
+      signalWaveFrames = [];
+
+      signalWaveLayers.forEach(function(layer) {
+        if (layer && map.hasLayer(layer)) {
+          map.removeLayer(layer);
+        }
+      });
+      signalWaveLayers = [];
+    }
+
+    function stopSignalWave() {
+      if (signalWaveInterval) {
+        clearInterval(signalWaveInterval);
+        signalWaveInterval = null;
+      }
+
+      clearSignalWavePass();
+    }
+
+    function buildSignalWaveSegments(routePoints) {
+      var segments = [];
+      if (!routePoints || routePoints.length < 2) {
+        return segments;
+      }
+
+      for (var startIndex = 0; startIndex < routePoints.length - 1; startIndex += SIGNAL_WAVE_SEGMENT_SIZE) {
+        var endIndex = Math.min(startIndex + SIGNAL_WAVE_SEGMENT_SIZE, routePoints.length - 1);
+        var segmentPoints = routePoints.slice(startIndex, endIndex + 1);
+
+        if (segmentPoints.length > 1) {
+          segments.push(segmentPoints);
+        }
+      }
+
+      return segments;
+    }
+
+    function fadeOutSignalLayer(layer) {
+      var fadeStartedAt = performance.now();
+
+      function step(now) {
+        var progress = Math.min(1, (now - fadeStartedAt) / SIGNAL_WAVE_FADE_MS);
+
+        if (layer && map.hasLayer(layer)) {
+          layer.setStyle({ opacity: SIGNAL_WAVE_OPACITY * (1 - progress) });
+        }
+
+        if (progress < 1) {
+          var frameId = requestAnimationFrame(step);
+          signalWaveFrames.push(frameId);
+        } else if (layer && map.hasLayer(layer)) {
+          map.removeLayer(layer);
+        }
+      }
+
+      var initialFrameId = requestAnimationFrame(step);
+      signalWaveFrames.push(initialFrameId);
+    }
+
+    function runSignalWavePass() {
+      clearSignalWavePass();
+
+      var segments = buildSignalWaveSegments(state.routeCoordinates);
+      if (!segments.length) {
+        return;
+      }
+
+      var staggerMs = Math.min(260, Math.max(110, Math.round(2400 / segments.length)));
+
+      segments.forEach(function(segmentPoints, index) {
+        var startTimeoutId = setTimeout(function() {
+          var segmentLayer = L.polyline(segmentPoints, {
+            color: SIGNAL_WAVE_COLOR,
+            weight: 10,
+            opacity: SIGNAL_WAVE_OPACITY,
+            lineCap: 'round',
+            lineJoin: 'round',
+          }).addTo(map);
+
+          signalWaveLayers.push(segmentLayer);
+
+          var fadeTimeoutId = setTimeout(function() {
+            fadeOutSignalLayer(segmentLayer);
+          }, SIGNAL_WAVE_ACTIVE_MS);
+
+          signalWaveTimeouts.push(fadeTimeoutId);
+        }, index * staggerMs);
+
+        signalWaveTimeouts.push(startTimeoutId);
+      });
+    }
+
+    function restartSignalWave() {
+      stopSignalWave();
+
+      if (!state.routeCoordinates || state.routeCoordinates.length < 2) {
+        return;
+      }
+
+      runSignalWavePass();
+      signalWaveInterval = setInterval(runSignalWavePass, SIGNAL_WAVE_REPEAT_MS);
+    }
+
     function renderStaticRoute(shouldFitBounds) {
       if (!state.routeCoordinates || !state.routeCoordinates.length) return false;
 
       if (!routeLine) {
         routeLine = L.polyline(state.routeCoordinates, {
-          color: '#10b981', weight: 8, opacity: 0.96,
+          color: ROUTE_BASE_COLOR, weight: 8, opacity: 0.95,
           lineCap: 'round', lineJoin: 'round',
         }).addTo(map);
       } else {
+        routeLine.setStyle({ color: ROUTE_BASE_COLOR, weight: 8, opacity: 0.95 });
         routeLine.setLatLngs(state.routeCoordinates);
       }
 
       if (shouldFitBounds) {
         map.fitBounds(routeLine.getBounds(), { padding: [36, 36], animate: false });
+      }
+
+      var nextRouteKey = routeKeyFromPoints(state.routeCoordinates);
+      if (nextRouteKey !== signalWaveRouteKey) {
+        signalWaveRouteKey = nextRouteKey;
+        restartSignalWave();
       }
 
       var remaining = getRemainingRouteDistanceMeters(state.routeCoordinates, state.currentPosition);
@@ -539,6 +685,9 @@ function buildNavigationMapHtml(options = {}) {
     }
 
     function clearStaticRoute() {
+      stopSignalWave();
+      signalWaveRouteKey = '';
+
       if (routeLine) {
         map.removeLayer(routeLine);
         routeLine = null;
@@ -821,6 +970,7 @@ function buildNavigationMapHtml(options = {}) {
     setHeaderContent();
     window.addEventListener('message', onMessage);
     document.addEventListener('message', onMessage);
+    window.addEventListener('beforeunload', stopSignalWave);
   </script>
 </body>
 </html>`;
