@@ -547,6 +547,14 @@ function buildNavigationMapHtml(options = {}) {
       distanceEl.textContent = formatDistance(route.summary.totalDistance);
       etaEl.textContent = state.etaLabel || formatDuration(route.summary.totalTime);
       renderInstructions(route.instructions || []);
+        // Cache the route for next time (sessionStorage) using rounded start/dest
+        try {
+          var cacheKey = 'route:' + state.currentPosition.lat.toFixed(6) + ',' + state.currentPosition.lng.toFixed(6) + '|' + state.destination.lat.toFixed(6) + ',' + state.destination.lng.toFixed(6);
+          if (Array.isArray(route.coordinates) && route.coordinates.length) {
+            var cacheArray = route.coordinates.map(function(c) { return [c.lat !== undefined ? c.lat : c[1], c.lng !== undefined ? c.lng : c[0]]; });
+            sessionStorage.setItem(cacheKey, JSON.stringify(cacheArray));
+          }
+        } catch (e) {}
     });
 
     routingControl.on('routingerror', function() {

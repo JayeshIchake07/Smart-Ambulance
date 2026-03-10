@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import LeafletMap from '../components/LeafletMap';
 import { getSocket } from '../services/api';
+import * as Location from 'expo-location';
 import { colors } from '../utils/constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -92,6 +93,47 @@ export default function TrackingScreen({ navigation, route }) {
       socket.off('ambulance-location');
       socket.off('status-update');
       socket.off('help-complete');
+      // stop any location watchers
+      if (locationWatcher) {
+        locationWatcher.remove();
+        locationWatcher = null;
+      }
+    };
+  }, [emergencyId]);
+
+  // live victim location publishing
+  useEffect(() => {
+    let watcher = null;
+    let locationWatcherStarted = false;
+    const socket = getSocket();
+
+    const start = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        // inform server of initial position
+        socket.emit('patient-location', { lat: pos.coords.latitude, lng: pos.coords.longitude, emergencyId });
+
+        watcher = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.Highest, timeInterval: 3000, distanceInterval: 2 },
+          (position) => {
+            socket.emit('patient-location', { lat: position.coords.latitude, lng: position.coords.longitude, emergencyId });
+            // update local map victim location
+            // not changing state.victimLocation here — server will broadcast back if needed
+          }
+        );
+        locationWatcherStarted = true;
+      } catch (err) {
+        // ignore
+      }
+    };
+
+    start();
+
+    return () => {
+      if (watcher) watcher.remove();
     };
   }, [emergencyId]);
 

@@ -121,6 +121,39 @@ module.exports = (io) => {
       }
     });
 
+    // ── Patient live location updates ─────────────────────────────────────
+    socket.on('patient-location', async ({ lat, lng, emergencyId }) => {
+      try {
+        const emergency = await Emergency.findById(emergencyId).populate('ambulance').populate('hospital');
+        if (!emergency) return;
+
+        // Update victim location in DB
+        emergency.victimLocation = { lat, lng };
+        await emergency.save();
+
+        // Notify ambulance driver if assigned
+        if (emergency.ambulance && emergency.ambulance.driver) {
+          io.to(`user-${emergency.ambulance.driver.toString()}`).emit('victim-location', {
+            emergencyId,
+            lat,
+            lng,
+          });
+        } else {
+          // broadcast to drivers' room if no specific driver bound yet
+          io.to('driver').emit('victim-location', { emergencyId, lat, lng });
+        }
+
+        // Notify hospital dashboards
+        io.to('hospital').emit('victim-location', {
+          emergencyId,
+          lat,
+          lng,
+        });
+      } catch (err) {
+        console.error('patient-location error:', err.message);
+      }
+    });
+
     // ── Patient picked up ──────────────────────────────────────────────────
     socket.on('patient-picked-up', async ({ emergencyId }) => {
       try {

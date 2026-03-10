@@ -4,7 +4,8 @@ import {
   Animated, TouchableOpacity,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getSocket } from '../services/api';
+import * as Location from 'expo-location';
+import api, { getSocket } from '../services/api';
 
 const C = {
   bg: '#0D0D0D', card: '#1C1C1E', card2: '#2C2C2E',
@@ -44,6 +45,62 @@ export default function HomeScreen({ navigation, route }) {
     };
     socket.on('new-emergency', handleEmergency);
     return () => socket.off('new-emergency', handleEmergency);
+  }, [isOnline]);
+
+  // Publish location when online
+  useEffect(() => {
+    let watcher = null;
+
+    const publishLocation = async (lat, lng) => {
+      try {
+        // update backend ambulance location (driver token expected)
+        await api.put('/api/ambulance/location', { lat, lng });
+      } catch (e) {
+        // ignore network errors in UI
+      }
+
+      try {
+        const socket = getSocket();
+        socket.emit('driver-location', { lat, lng });
+      } catch (e) {}
+    };
+
+    const startWatcher = async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        publishLocation(pos.coords.latitude, pos.coords.longitude);
+
+        watcher = await Location.watchPositionAsync({
+          accuracy: Location.Accuracy.Highest,
+          timeInterval: 3000,
+          distanceInterval: 5,
+        }, (position) => {
+          publishLocation(position.coords.latitude, position.coords.longitude);
+        });
+      } catch (err) {
+        // fallback: nothing
+      }
+    };
+
+    if (isOnline) startWatcher();
+
+    return () => {
+      if (watcher) watcher.remove();
+      watcher = null;
+    };
+  }, [isOnline]);
+
+  // Sync status when toggled
+  useEffect(() => {
+    const syncStatus = async () => {
+      try {
+        await api.put('/api/ambulance/status', { status: isOnline ? 'available' : 'offline' });
+      } catch (e) {}
+    };
+    syncStatus();
   }, [isOnline]);
 
   const handleLogout = async () => {

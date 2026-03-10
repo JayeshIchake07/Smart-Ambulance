@@ -70,6 +70,20 @@ export default function HomeScreen({ navigation }) {
       Animated.timing(pressAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
     ]).start();
 
+    // Ensure we have a fresh GPS position before navigating
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        setLocation(loc.coords);
+        setLocationText(`${loc.coords.latitude.toFixed(4)}, ${loc.coords.longitude.toFixed(4)}`);
+        navigation.navigate('Emergency', { location: loc.coords });
+        return;
+      }
+    } catch (e) {
+      // ignore and fallback to last-known
+    }
+
     navigation.navigate('Emergency', { location });
   };
 
