@@ -11,7 +11,7 @@ const getPoint = (location, fallback) => {
   return fallback;
 };
 
-const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route, status, eta, style }) => {
+const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, hospital, route, status, eta, style }) => {
   const webViewRef = useRef(null);
   const iframeRef = useRef(null);
   const hasInitializedRef = useRef(false);
@@ -27,6 +27,21 @@ const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route
     ? 'Your ambulance is taking the fastest route to the assigned hospital.'
     : 'Your ambulance is following the live route to your location.';
   const routeCoordinates = Array.isArray(route) && route.length > 1 ? route : [];
+  const selectedHospitalMarkers = useMemo(() => {
+    if (!hospitalLocation || typeof hospitalLocation.lat !== 'number' || typeof hospitalLocation.lng !== 'number') {
+      return [];
+    }
+
+    return [{
+      _id: hospital?._id,
+      name: hospital?.name || 'Assigned Hospital',
+      address: hospital?.address || '',
+      location: hospitalLocation,
+      availableBeds: hospital?.availableBeds,
+      specialists: hospital?.specialists || ['general'],
+      phone: hospital?.phone,
+    }];
+  }, [hospital?._id, hospital?.address, hospital?.availableBeds, hospital?.name, hospital?.phone, hospital?.specialists, hospitalLocation]);
   const mapInstanceKey = useMemo(() => {
     var first = routeCoordinates[0] || [];
     var last = routeCoordinates[routeCoordinates.length - 1] || [];
@@ -41,8 +56,11 @@ const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route
       first[1],
       last[0],
       last[1],
+      selectedHospitalMarkers.length,
+      selectedHospitalMarkers[0]?.location?.lat,
+      selectedHospitalMarkers[0]?.location?.lng,
     ].join('|');
-  }, [currentPosition.lat, currentPosition.lng, destination.lat, destination.lng, isToHospital, routeCoordinates]);
+  }, [currentPosition.lat, currentPosition.lng, destination.lat, destination.lng, isToHospital, routeCoordinates, selectedHospitalMarkers]);
 
   const html = useMemo(() => buildNavigationMapHtml({
     startLat: currentPosition.lat,
@@ -56,7 +74,8 @@ const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route
     markerVariant: 'arrow',
     hintText: 'Tap map to show navigation',
     routeCoordinates,
-  }), [destination.lat, destination.lng, destinationLabel, panelSubtitle, phaseLabel, routeCoordinates]);
+    hospitals: selectedHospitalMarkers,
+  }), [destination.lat, destination.lng, destinationLabel, panelSubtitle, phaseLabel, routeCoordinates, selectedHospitalMarkers]);
 
   useEffect(() => {
     setMapReady(false);
@@ -95,10 +114,11 @@ const LeafletMap = ({ victimLocation, ambulanceLocation, hospitalLocation, route
       panelSubtitle,
       etaLabel: eta ? `${Math.ceil(eta)} min` : '',
       routeCoordinates,
+      hospitals: selectedHospitalMarkers,
     });
 
     hasInitializedRef.current = true;
-  }, [currentPosition.lat, currentPosition.lng, destination.lat, destination.lng, destinationLabel, eta, mapReady, panelSubtitle, phaseLabel, routeCoordinates, sendPostMessage]);
+  }, [currentPosition.lat, currentPosition.lng, destination.lat, destination.lng, destinationLabel, eta, mapReady, panelSubtitle, phaseLabel, routeCoordinates, selectedHospitalMarkers, sendPostMessage]);
 
   if (Platform.OS === 'web') {
     return (

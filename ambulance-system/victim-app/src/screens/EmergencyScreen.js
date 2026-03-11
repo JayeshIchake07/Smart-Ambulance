@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
   ScrollView, SafeAreaView, ActivityIndicator, Alert,
   Dimensions, Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import api from '../services/api';
 import { colors, EMERGENCY_TYPES } from '../utils/constants';
 import LeafletMap from '../components/LeafletMap';
+import { Linking } from 'react-native';
 
 const { height } = Dimensions.get('window');
 
@@ -17,7 +19,142 @@ export default function EmergencyScreen({ navigation, route }) {
   const [showMap, setShowMap] = useState(false);
   const [mapData, setMapData] = useState(null);
   const { location } = route.params || {};
+  const [deviceLocation, setDeviceLocation] = useState(() => {
+    if (location?.latitude && location?.longitude) {
+      return { lat: location.latitude, lng: location.longitude };
+    }
+
+    return null;
+  });
+  const [nearestHospital, setNearestHospital] = useState(null);
+  const [nearestDistanceKm, setNearestDistanceKm] = useState(null);
   const previewRoute = mapData?.route || [];
+
+  const HOSPITAL_WEBSITE_DISTANCE_KM = 10; // enable website link only within this radius
+
+  const getCurrentDeviceLocation = async () => {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (permission.status !== 'granted') {
+      throw new Error('Location permission is required to dispatch the nearest ambulance.');
+    }
+
+    const position = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.High,
+    });
+
+    const nextLocation = {
+      lat: position.coords.latitude,
+      lng: position.coords.longitude,
+    };
+
+    setDeviceLocation(nextLocation);
+    return nextLocation;
+  };
+
+  useEffect(() => {
+    getCurrentDeviceLocation().catch(() => {
+      if (location?.latitude && location?.longitude) {
+        setDeviceLocation({ lat: location.latitude, lng: location.longitude });
+      }
+    });
+  }, [location?.latitude, location?.longitude]);
+
+  useEffect(() => {
+    // compute nearest hospital from backend list using current device location
+    const findNearest = async () => {
+      try {
+        const res = await api.get('/api/hospital');
+        const hospitals = res.data || [];
+        if (!deviceLocation || hospitals.length === 0) return;
+        const { lat, lng } = deviceLocation;
+        let best = null;
+        let bestDist = Infinity;
+        hospitals.forEach((h) => {
+          if (!h.location) return;
+          const d = haversineKm(lat, lng, h.location.lat, h.location.lng);
+          if (d < bestDist) {
+            bestDist = d;
+            best = h;
+          }
+        });
+        if (best) {
+          setNearestHospital(best);
+          setNearestDistanceKm(bestDist);
+        }
+      } catch (err) {
+        // ignore for now
+      }
+    };
+    findNearest();
+  }, [deviceLocation]);
+
+  const haversineKm = (lat1, lon1, lat2, lon2) => {
+    const toRad = (v) => (v * Math.PI) / 180;
+    const R = 6371; // km
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+      + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2))
+      * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  const openHospitalWebsite = async (url) => {
+    if (!url) return Alert.alert('No website', 'This hospital does not provide a website.');
+    if (!nearestDistanceKm || nearestDistanceKm > HOSPITAL_WEBSITE_DISTANCE_KM) {
+      return Alert.alert('Unavailable', 'Hospital website is available only if you are near their area.');
+    }
+    const ok = await Linking.canOpenURL(url);
+    if (ok) return Linking.openURL(url);
+    return Alert.alert('Cannot open', 'Unable to open the hospital website.');
+  };
+
+  const loginDemoVictim = async () => {
+    const loginRes = await api.post('/api/auth/login', {
+      email: 'victim@test.com',
+      password: '123456',
+    });
+
+    const nextToken = loginRes.data.token;
+    const nextUserId = loginRes.data.user._id;
+
+    await AsyncStorage.multiSet([
+      ['token', nextToken],
+      ['userId', nextUserId],
+    ]);
+
+    return {
+      token: nextToken,
+      userId: nextUserId,
+    };
+  };
+
+  const ensureVictimSession = async () => {
+    const token = await AsyncStorage.getItem('token');
+    const userId = await AsyncStorage.getItem('userId');
+
+    if (!token) {
+      return loginDemoVictim();
+    }
+
+    try {
+      await api.get('/api/auth/me', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      return { token, userId };
+    } catch (err) {
+      if (err.response?.status !== 401) {
+        throw err;
+      }
+
+      await AsyncStorage.multiRemove(['token', 'userId']);
+      return loginDemoVictim();
+    }
+  };
 
   const handleSendHelp = async () => {
     if (!selected) {
@@ -27,29 +164,20 @@ export default function EmergencyScreen({ navigation, route }) {
 
     setLoading(true);
     try {
-      // Auto-login if no token
-      let token = await AsyncStorage.getItem('token');
-      let userId = await AsyncStorage.getItem('userId');
+      const { token, userId } = await ensureVictimSession();
 
-      if (!token) {
-        const loginRes = await api.post('/api/auth/login', {
-          email: 'victim@test.com',
-          password: '123456',
-        });
-        token = loginRes.data.token;
-        userId = loginRes.data.user._id;
-        await AsyncStorage.setItem('token', token);
-        await AsyncStorage.setItem('userId', userId);
-      }
-
-      // SOS dispatch
-      const lat = location?.latitude || 19.076;
-      const lng = location?.longitude || 72.8777;
+      const currentLocation = await getCurrentDeviceLocation();
+      const lat = currentLocation.lat;
+      const lng = currentLocation.lng;
 
       const res = await api.post('/api/dispatch', {
         lat,
         lng,
         emergencyType: selected.id,
+      }, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
 
       const data = res.data;
@@ -100,6 +228,7 @@ export default function EmergencyScreen({ navigation, route }) {
               lat: mapData.hospital?.location?.lat,
               lng: mapData.hospital?.location?.lng,
             }}
+            hospital={mapData.hospital}
             route={previewRoute}
             status="driver_accepted"
             eta={mapData.eta}
@@ -125,6 +254,11 @@ export default function EmergencyScreen({ navigation, route }) {
               <Text style={styles.mapInfoLabel}>🏥 Hospital</Text>
               <Text style={styles.mapInfoValue} numberOfLines={1}>
                 {mapData.hospital?.name || 'Assigning...'}
+              </Text>
+              <Text style={styles.mapInfoMeta}>
+                {typeof mapData.hospital?.distance === 'number'
+                  ? `${mapData.hospital.distance.toFixed(2)} km away`
+                  : 'Distance unavailable'}
               </Text>
             </View>
           </View>
@@ -180,6 +314,32 @@ export default function EmergencyScreen({ navigation, route }) {
             );
           })}
         </View>
+
+        {/* Nearest hospital quick info (before dispatch) */}
+        {nearestHospital && (
+          <View style={styles.nearestCard}>
+            <Text style={styles.nearestLabel}>Nearest Hospital</Text>
+            <Text style={styles.nearestName}>{nearestHospital.name} · {nearestDistanceKm ? `${nearestDistanceKm.toFixed(1)} km` : ''}</Text>
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+              <TouchableOpacity
+                style={[styles.siteBtn, nearestDistanceKm && nearestDistanceKm <= HOSPITAL_WEBSITE_DISTANCE_KM ? {} : { opacity: 0.5 }]}
+                onPress={() => openHospitalWebsite(nearestHospital.website)}
+                disabled={!nearestDistanceKm || nearestDistanceKm > HOSPITAL_WEBSITE_DISTANCE_KM}
+              >
+                <Text style={styles.siteBtnText}>Visit Hospital Site</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.callBtn}
+                onPress={() => {
+                  if (nearestHospital.phone) Linking.openURL(`tel:${nearestHospital.phone}`);
+                  else Alert.alert('No phone', 'Phone number not available');
+                }}
+              >
+                <Text style={styles.siteBtnText}>Call</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {/* Selected banner */}
         {selected && (
@@ -268,6 +428,30 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     marginBottom: 8,
   },
+
+  nearestCard: {
+    backgroundColor: colors.cardDark,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  nearestLabel: { color: colors.textSecondary, fontSize: 12, marginBottom: 4 },
+  nearestName: { color: colors.textPrimary, fontSize: 14, fontWeight: '700' },
+  siteBtn: {
+    backgroundColor: colors.info,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  siteBtnText: { color: '#fff', fontWeight: '700' },
+  callBtn: {
+    backgroundColor: colors.safe,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
   priorityBadge: {
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -350,6 +534,11 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontSize: 14,
     fontWeight: '600',
+  },
+  mapInfoMeta: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginTop: 4,
   },
   continueBtn: {
     backgroundColor: colors.safe,

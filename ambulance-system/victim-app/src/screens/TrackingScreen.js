@@ -35,6 +35,7 @@ export default function TrackingScreen({ navigation, route }) {
   });
   const [currentRoute, setCurrentRoute] = useState(initRoute || []);
   const [hospitalLocation, setHospitalLocation] = useState(hospital?.location);
+  const [selectedHospital, setSelectedHospital] = useState(hospital);
   const [liveVictimLocation, setLiveVictimLocation] = useState(victimLocation);
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -89,6 +90,10 @@ export default function TrackingScreen({ navigation, route }) {
 
           if (data.hospital?.location) {
             setHospitalLocation(data.hospital.location);
+          }
+
+          if (data.hospital) {
+            setSelectedHospital(data.hospital);
           }
 
           if (data.eta !== undefined) {
@@ -179,6 +184,7 @@ export default function TrackingScreen({ navigation, route }) {
           victimLocation={liveVictimLocation}
           ambulanceLocation={ambulanceLocation}
           hospitalLocation={hospitalLocation}
+          hospital={selectedHospital}
           route={currentRoute}
           status={status}
           eta={eta}
@@ -235,13 +241,14 @@ export default function TrackingScreen({ navigation, route }) {
         )}
 
         {/* Hospital Card */}
-        {hospital && (
+        {selectedHospital && (
           <View style={styles.hospitalCard}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.hospitalName}>🏥 {hospital.name}</Text>
-              <Text style={styles.hospitalAddr}>{hospital.address}</Text>
+              <Text style={styles.hospitalName}>🏥 {selectedHospital.name}</Text>
+              <Text style={styles.hospitalAddr}>{selectedHospital.address}</Text>
               <View style={styles.pillRow}>
-                <View style={styles.pill}><Text style={styles.pillText}>🛏 {hospital.availableBeds} beds</Text></View>
+                <View style={styles.pill}><Text style={styles.pillText}>🛏 {selectedHospital.availableBeds} beds</Text></View>
+                <View style={styles.pill}><Text style={styles.pillText}>📍 {typeof selectedHospital.distance === 'number' ? `${selectedHospital.distance.toFixed(2)} km` : 'Distance pending'}</Text></View>
                 <View style={styles.pill}><Text style={styles.pillText}>24/7 Emergency</Text></View>
                 <View style={[styles.pill, { backgroundColor: '#34C75920' }]}>
                   <Text style={[styles.pillText, { color: colors.safe }]}>Best Match</Text>
@@ -250,7 +257,7 @@ export default function TrackingScreen({ navigation, route }) {
             </View>
             {/* Score Circle */}
             <View style={styles.scoreCircle}>
-              <Text style={styles.scoreNumber}>{Math.round(hospital.score || 85)}</Text>
+              <Text style={styles.scoreNumber}>{Math.round(selectedHospital.score || 85)}</Text>
               <Text style={styles.scoreLabel}>Score</Text>
             </View>
           </View>

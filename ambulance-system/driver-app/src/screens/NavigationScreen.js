@@ -90,6 +90,22 @@ export default function NavigationScreen({ navigation, route }) {
       : []),
     [coords]
   );
+  const selectedHospitalMarkers = useMemo(() => {
+    const hospitalPoint = getLocationPoint(emergency.hospital?.location);
+    if (!hospitalPoint) {
+      return [];
+    }
+
+    return [{
+      _id: emergency.hospital?._id,
+      name: emergency.hospital?.name || 'Assigned Hospital',
+      address: emergency.hospital?.address || '',
+      location: hospitalPoint,
+      availableBeds: emergency.hospital?.availableBeds,
+      specialists: emergency.hospital?.specialists || ['general'],
+      phone: emergency.hospital?.phone,
+    }];
+  }, [emergency.hospital]);
 
   const mapConfig = useMemo(() => {
     const fallbackPoint = initialRoutePoint(emergency);
@@ -112,8 +128,9 @@ export default function NavigationScreen({ navigation, route }) {
       markerVariant: 'arrow',
       hintText: 'Tap map to show navigation',
       routeCoordinates,
+      hospitals: selectedHospitalMarkers,
     };
-  }, [currentPosition, destinationLabel, emergency, panelSubtitle, phaseLabel, routeCoordinates, target]);
+  }, [currentPosition, destinationLabel, emergency, panelSubtitle, phaseLabel, routeCoordinates, selectedHospitalMarkers, target]);
 
   useEffect(() => {
     if (!mapConfig) {
@@ -150,10 +167,11 @@ export default function NavigationScreen({ navigation, route }) {
       panelSubtitle,
       etaLabel: `${Math.ceil(eta)} min`,
       routeCoordinates,
+      hospitals: selectedHospitalMarkers,
     });
 
     hasInitializedRef.current = true;
-  }, [destinationLabel, eta, mapConfig, mapReady, panelSubtitle, phaseLabel, routeCoordinates]);
+  }, [destinationLabel, eta, mapConfig, mapReady, panelSubtitle, phaseLabel, routeCoordinates, selectedHospitalMarkers]);
 
   const postMapMessage = (payload) => {
     const message = JSON.stringify(payload);
@@ -219,6 +237,7 @@ export default function NavigationScreen({ navigation, route }) {
         panelSubtitle,
         etaLabel: `${nextEta} min`,
         routeCoordinates,
+        hospitals: selectedHospitalMarkers,
       });
       hasInitializedRef.current = true;
     }

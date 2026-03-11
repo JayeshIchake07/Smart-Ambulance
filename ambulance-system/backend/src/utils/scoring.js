@@ -14,16 +14,23 @@ const SPECIALIST_MAP = {
 };
 
 /**
- * findBestHospital — AI scoring algorithm
+ * findBestHospital — nearest eligible hospital selector
  *
- * Scoring weights:
- *   Beds availability  → 45 points max
- *   Specialist match   → 35 points max
- *   Distance (inverse) → 20 points max
- *
- * Returns hospital with highest score
+ * Selection priority:
+ *   1. Hospitals with the required specialist
+ *   2. Hospitals with general capability
+ *   3. Remaining active hospitals
+ *   4. Within the best capability tier, choose the nearest hospital
+ *   5. Use beds/score only as tie-breakers
  */
 const findBestHospital = async (victimLat, victimLng, emergencyType = 'Unknown') => {
+  const lat = Number(victimLat);
+  const lng = Number(victimLng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    throw new Error('Invalid victim coordinates for hospital scoring');
+  }
+
   const hospitals = await Hospital.find({ isActive: true });
 
   if (!hospitals.length) {
@@ -32,10 +39,17 @@ const findBestHospital = async (victimLat, victimLng, emergencyType = 'Unknown')
 
   const requiredSpecialist = SPECIALIST_MAP[emergencyType] || 'general';
 
+  console.log('[findBestHospital] incoming coordinates:', {
+    lat,
+    lng,
+    emergencyType,
+    requiredSpecialist,
+  });
+
   const scored = hospitals.map((hospital) => {
     const distance = getDistance(
-      victimLat,
-      victimLng,
+      lat,
+      lng,
       hospital.location.lat,
       hospital.location.lng
     );
@@ -48,6 +62,7 @@ const findBestHospital = async (victimLat, victimLng, emergencyType = 'Unknown')
     // ── Specialist Score (0–35) ────────────────────────────────────────────
     const hasSpecialist = hospital.specialists.includes(requiredSpecialist);
     const hasGeneral = hospital.specialists.includes('general');
+    const specialistTier = hasSpecialist ? 2 : hasGeneral ? 1 : 0;
     let specialistScore = 0;
     if (hasSpecialist) specialistScore = 35;
     else if (hasGeneral) specialistScore = 15;
@@ -63,14 +78,54 @@ const findBestHospital = async (victimLat, victimLng, emergencyType = 'Unknown')
       hospital,
       distance: parseFloat(distance.toFixed(2)),
       score: parseFloat(totalScore.toFixed(1)),
-      breakdown: { bedsScore, specialistScore, distanceScore },
+      specialistTier,
+      breakdown: {
+        bedsScore: parseFloat(bedsScore.toFixed(1)),
+        specialistScore: parseFloat(specialistScore.toFixed(1)),
+        distanceScore: parseFloat(distanceScore.toFixed(1)),
+      },
     };
   });
 
-  // Sort by score descending — best first
-  scored.sort((a, b) => b.score - a.score);
+  console.table(
+    scored.map((entry) => ({
+      hospital: entry.hospital.name,
+      distanceKm: entry.distance,
+      beds: entry.hospital.availableBeds,
+      specialists: (entry.hospital.specialists || []).join(', '),
+      specialistTier: entry.specialistTier,
+      bedsScore: entry.breakdown.bedsScore,
+      specialistScore: entry.breakdown.specialistScore,
+      distanceScore: entry.breakdown.distanceScore,
+      totalScore: entry.score,
+    }))
+  );
 
-  const best = scored[0];
+  const bestTier = Math.max(...scored.map((entry) => entry.specialistTier));
+
+  const eligible = scored.filter((entry) => entry.specialistTier === bestTier);
+
+  eligible.sort((a, b) => {
+    if (a.distance !== b.distance) {
+      return a.distance - b.distance;
+    }
+
+    if (a.hospital.availableBeds !== b.hospital.availableBeds) {
+      return b.hospital.availableBeds - a.hospital.availableBeds;
+    }
+
+    return b.score - a.score;
+  });
+
+  const best = eligible[0];
+  console.log('[findBestHospital] selected hospital:', {
+    hospital: best.hospital.name,
+    distanceKm: best.distance,
+    specialistTier: best.specialistTier,
+    score: best.score,
+    breakdown: best.breakdown,
+  });
+
   return {
     hospital: best.hospital,
     distance: best.distance,

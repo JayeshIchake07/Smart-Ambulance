@@ -49,6 +49,7 @@ function buildNavigationMapHtml(options = {}) {
     markerVariant = 'ambulance',
     hintText = 'Tap map to show navigation',
     routeCoordinates = [],
+    hospitals = [],
   } = options;
 
   const safeTitle = escapeHtml(title);
@@ -70,6 +71,7 @@ function buildNavigationMapHtml(options = {}) {
           .filter(Boolean)
       : []
   );
+  const hospitalsLiteral = JSON.stringify(Array.isArray(hospitals) ? hospitals : []);
 
   return `<!DOCTYPE html>
 <html>
@@ -77,8 +79,11 @@ function buildNavigationMapHtml(options = {}) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
   <style>
     :root {
@@ -333,6 +338,58 @@ function buildNavigationMapHtml(options = {}) {
       border-bottom: 16px solid #ffffff;
     }
 
+    /* Hospital marker styles */
+    .hospital-marker {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 18px;
+      color: #fff;
+      font-weight: 700;
+      box-shadow: 0 6px 12px rgba(0,0,0,0.18);
+      border: 2px solid #fff;
+      font-size: 12px;
+    }
+    .hospital-marker--green { background: #10b981; }
+    .hospital-marker--orange { background: #ff9f0a; }
+    .hospital-marker--red { background: #ff3b30; }
+    .hospital-marker .label { padding: 0 4px; }
+    .custom-cluster { display: inline-grid; place-items: center; color: #fff; font-weight: 700; border-radius: 999px; }
+    .marker-cluster-small { background: rgba(16,24,40,0.9); width:34px; height:34px; }
+    .marker-cluster-medium { background: rgba(10,132,255,0.95); width:44px; height:44px; }
+    .marker-cluster-large { background: rgba(17,163,106,0.95); width:56px; height:56px; }
+    /* Specialty legend */
+    .specialty-legend {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      z-index: 1100;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      pointer-events: auto;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.9);
+      box-shadow: 0 6px 14px rgba(10,20,40,0.08);
+      cursor: pointer;
+      font-size: 13px;
+      color: #111827;
+      user-select: none;
+    }
+
+    .legend-item--inactive { opacity: 0.45; }
+
+    .legend-icon { width: 18px; height: 18px; display: inline-block; }
+
     .destination-pin {
       width: 18px;
       height: 18px;
@@ -426,6 +483,18 @@ function buildNavigationMapHtml(options = {}) {
       panelSubtitle: '${safePanelSubtitle}',
       etaLabel: '',
       routeCoordinates: (${routeCoordinatesLiteral} || []).map(function(p) { return L.latLng(p[0], p[1]); }),
+      hospitals: (${hospitalsLiteral} || []).map(function(h) {
+        if (!h || !h.location) return null;
+        return {
+          name: h.name || 'Hospital',
+          address: h.address || '',
+          lat: Number(h.location.lat),
+          lng: Number(h.location.lng),
+          specialists: h.specialists || [],
+          availableBeds: typeof h.availableBeds === 'number' ? h.availableBeds : (h.availableBeds ? Number(h.availableBeds) : 0),
+          phone: h.phone || ''
+        };
+      }).filter(Boolean),
     };
 
     var map = L.map('map', { zoomControl: true, preferCanvas: true }).setView(state.currentPosition, 14);
@@ -668,7 +737,17 @@ function buildNavigationMapHtml(options = {}) {
       }
 
       if (shouldFitBounds) {
-        map.fitBounds(routeLine.getBounds(), { padding: [36, 36], animate: false });
+        var bounds = routeLine.getBounds();
+        bounds.extend(state.currentPosition);
+        bounds.extend(state.destination);
+        (state.hospitals || []).forEach(function(hospital) {
+          var hospitalLat = Number(hospital.lat || (hospital.location && hospital.location.lat));
+          var hospitalLng = Number(hospital.lng || (hospital.location && hospital.location.lng));
+          if (Number.isFinite(hospitalLat) && Number.isFinite(hospitalLng)) {
+            bounds.extend([hospitalLat, hospitalLng]);
+          }
+        });
+        map.fitBounds(bounds, { padding: [36, 36], animate: false });
       }
 
       var nextRouteKey = routeKeyFromPoints(state.routeCoordinates);
@@ -751,6 +830,192 @@ function buildNavigationMapHtml(options = {}) {
 
     var vehicleMarker = L.marker(state.currentPosition, { icon: vehicleIcon, zIndexOffset: 1000 }).addTo(map);
     var targetMarker = L.marker(state.destination, { icon: destinationIcon }).addTo(map);
+
+    // Hospital clustering + distinct icons
+    var hospitalClusterGroup = L.markerClusterGroup({
+      chunkedLoading: true,
+      iconCreateFunction: function(cluster) {
+        var count = cluster.getChildCount();
+        var size = 'small';
+        if (count >= 50) size = 'large';
+        else if (count >= 15) size = 'medium';
+
+        var cls = 'marker-cluster-' + size;
+        var html = '<div class="custom-cluster ' + cls + '"><span>' + count + '</span></div>';
+        return L.divIcon({ html: html, className: '', iconSize: size === 'large' ? [56,56] : size === 'medium' ? [44,44] : [34,34], iconAnchor: [16,16] });
+      }
+    });
+    var hospitalMarkers = [];
+
+    function createHospitalDivIcon(hospital) {
+      var count = hospital.availableBeds || 0;
+      var cls = 'hospital-marker--green';
+      if (count < 8) cls = 'hospital-marker--red';
+      else if (count < 20) cls = 'hospital-marker--orange';
+
+      // Determine primary specialty and choose SVG
+      var specialty = (hospital.specialists && hospital.specialists[0]) || '';
+      var svg = '';
+      var titleSuffix = '';
+      switch ((specialty || '').toLowerCase()) {
+        case 'cardiac':
+          svg = '<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M12 21s-7-4.35-9-7.09C-1 9.42 3.33 4 8.5 6.5 12 8 12 12 12 12s0-4 3.5-5.5C20.67 4 25 9.42 21 13.91 19 16.65 12 21 12 21z"/></svg>';
+          titleSuffix = ' Cardiac';
+          break;
+        case 'neuro':
+          svg = '<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M12 2a5 5 0 0 0-5 5v1H5a3 3 0 0 0-3 3v3a6 6 0 0 0 6 6h6a6 6 0 0 0 6-6v-3a3 3 0 0 0-3-3h-2V7a5 5 0 0 0-5-5z"/></svg>';
+          titleSuffix = ' Neuro';
+          break;
+        case 'trauma':
+          svg = '<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M21 11h-8V3H11v8H3v2h8v8h2v-8h8z"/></svg>';
+          titleSuffix = ' Trauma';
+          break;
+        case 'ortho':
+          svg = '<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M12 2a2 2 0 0 0-2 2v3H7v2h3v6H8v2h3v3a2 2 0 0 0 4 0v-3h3v-2h-3v-6h3V9h-3V4a2 2 0 0 0-2-2z"/></svg>';
+          titleSuffix = ' Ortho';
+          break;
+        case 'oncology':
+          svg = '<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M12 2a5 5 0 0 1 5 5c0 3-5 6-5 6s-5-3-5-6a5 5 0 0 1 5-5zM4 20v-2a6 6 0 0 1 6-6h0a6 6 0 0 1 6 6v2H4z"/></svg>';
+          titleSuffix = ' Oncology';
+          break;
+        case 'general':
+        default:
+          svg = '<svg viewBox="0 0 24 24" width="18" height="18" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M12 2L8 6v6H2v8h20v-8h-6V6z"/></svg>';
+          titleSuffix = ' General';
+      }
+
+      var html = '<div class="hospital-marker ' + cls + '"><span class="label">' + svg + '</span></div>';
+      var icon = L.divIcon({ html: html, className: '', iconSize: [34, 34], iconAnchor: [17, 17] });
+      icon._title = (hospital.name || 'Hospital') + (titleSuffix || '');
+      icon._specialty = (specialty || 'general').toLowerCase();
+      return icon;
+    }
+
+    function clearHospitalMarkers() {
+      try {
+        hospitalMarkers.forEach(function(m) { hospitalClusterGroup.removeLayer(m); });
+        hospitalMarkers = [];
+        if (map.hasLayer(hospitalClusterGroup)) map.removeLayer(hospitalClusterGroup);
+      } catch (e) {}
+    }
+
+    function renderHospitalMarkers(hospitals) {
+      clearHospitalMarkers();
+      if (!hospitals || !hospitals.length) return;
+
+      // compute unique specialties
+      var specialtySet = {};
+      hospitals.forEach(function(h) { if (h.specialists && h.specialists.length) specialtySet[(h.specialists[0]||'general').toLowerCase()] = true; });
+      var specialtiesList = Object.keys(specialtySet);
+
+      hospitals.forEach(function(h) {
+        try {
+          var lat = Number(h.lat || (h.location && h.location.lat));
+          var lng = Number(h.lng || (h.location && h.location.lng));
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+          var icon = createHospitalDivIcon(h);
+          var marker = L.marker([lat, lng], { icon: icon, title: icon._title || h.name });
+          marker._specialty = (icon._specialty || (h.specialists && h.specialists[0]) || 'general').toLowerCase();
+          marker.bindPopup('<strong>' + (h.name || 'Hospital') + '</strong><br/>' + (h.address || '') + '<br/>Beds: ' + (h.availableBeds || 0));
+          hospitalMarkers.push(marker);
+          hospitalClusterGroup.addLayer(marker);
+        } catch (e) {}
+      });
+
+      map.addLayer(hospitalClusterGroup);
+
+      // render legend (specialty filter)
+      renderSpecialtyLegend(specialtiesList);
+    }
+
+    // Try to fetch hospitals from backend if none provided
+    (function ensureHospitals() {
+      if (state.hospitals && state.hospitals.length) {
+        renderHospitalMarkers(state.hospitals);
+        return;
+      }
+
+      // attempt to fetch; ignore failures
+      try {
+        fetch('/api/hospital').then(function(res) { return res.json(); }).then(function(json) {
+          if (Array.isArray(json) && json.length) {
+            var mapped = json.map(function(h) {
+              return {
+                name: h.name,
+                address: h.address,
+                lat: h.location && h.location.lat,
+                lng: h.location && h.location.lng,
+                availableBeds: h.availableBeds,
+                specialists: h.specialists || [],
+                phone: h.phone || ''
+              };
+            });
+            state.hospitals = mapped;
+            renderHospitalMarkers(mapped);
+          }
+        }).catch(function() {});
+      } catch (e) {}
+    })();
+
+      // Specialty filtering state
+      var activeSpecialties = {};
+
+      function renderSpecialtyLegend(specialties) {
+        try {
+          var existing = document.getElementById('specialty-legend');
+          if (existing) existing.parentNode.removeChild(existing);
+
+          var container = document.createElement('div');
+          container.id = 'specialty-legend';
+          container.className = 'specialty-legend';
+
+          specialties.forEach(function(s) {
+            var item = document.createElement('div');
+            item.className = 'legend-item';
+            item.dataset.specialty = s;
+            item.title = s;
+
+            var iconHtml = '';
+            switch (s) {
+              case 'cardiac': iconHtml = '<svg class="legend-icon" viewBox="0 0 24 24" fill="#ef4444" xmlns="http://www.w3.org/2000/svg"><path d="M12 21s-7-4.35-9-7.09C-1 9.42 3.33 4 8.5 6.5 12 8 12 12 12 12s0-4 3.5-5.5C20.67 4 25 9.42 21 13.91 19 16.65 12 21 12 21z"/></svg>'; break;
+              case 'neuro': iconHtml = '<svg class="legend-icon" viewBox="0 0 24 24" fill="#8b5cf6" xmlns="http://www.w3.org/2000/svg"><path d="M12 2a5 5 0 0 0-5 5v1H5a3 3 0 0 0-3 3v3a6 6 0 0 0 6 6h6a6 6 0 0 0 6-6v-3a3 3 0 0 0-3-3h-2V7a5 5 0 0 0-5-5z"/></svg>'; break;
+              case 'trauma': iconHtml = '<svg class="legend-icon" viewBox="0 0 24 24" fill="#06b6d4" xmlns="http://www.w3.org/2000/svg"><path d="M21 11h-8V3H11v8H3v2h8v8h2v-8h8z"/></svg>'; break;
+              case 'ortho': iconHtml = '<svg class="legend-icon" viewBox="0 0 24 24" fill="#f59e0b" xmlns="http://www.w3.org/2000/svg"><path d="M12 2a2 2 0 0 0-2 2v3H7v2h3v6H8v2h3v3a2 2 0 0 0 4 0v-3h3v-2h-3v-6h3V9h-3V4a2 2 0 0 0-2-2z"/></svg>'; break;
+              case 'oncology': iconHtml = '<svg class="legend-icon" viewBox="0 0 24 24" fill="#ec4899" xmlns="http://www.w3.org/2000/svg"><path d="M12 2a5 5 0 0 1 5 5c0 3-5 6-5 6s-5-3-5-6a5 5 0 0 1 5-5zM4 20v-2a6 6 0 0 1 6-6h0a6 6 0 0 1 6 6v2H4z"/></svg>'; break;
+              default: iconHtml = '<svg class="legend-icon" viewBox="0 0 24 24" fill="#10b981" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L8 6v6H2v8h20v-8h-6V6z"/></svg>';
+            }
+
+            item.innerHTML = iconHtml + '<span style="margin-left:4px">' + s.charAt(0).toUpperCase() + s.slice(1) + '</span>';
+
+            // default: active
+            activeSpecialties[s] = true;
+
+            item.addEventListener('click', function() {
+              var sp = this.dataset.specialty;
+              activeSpecialties[sp] = !activeSpecialties[sp];
+              this.classList.toggle('legend-item--inactive', !activeSpecialties[sp]);
+              filterHospitalMarkers();
+            });
+
+            container.appendChild(item);
+          });
+
+          document.body.appendChild(container);
+        } catch (e) {}
+      }
+
+      function filterHospitalMarkers() {
+        try {
+          hospitalMarkers.forEach(function(marker) {
+            var sp = marker._specialty || 'general';
+            if (activeSpecialties[sp]) {
+              if (!hospitalClusterGroup.hasLayer(marker)) hospitalClusterGroup.addLayer(marker);
+            } else {
+              if (hospitalClusterGroup.hasLayer(marker)) hospitalClusterGroup.removeLayer(marker);
+            }
+          });
+        } catch (e) {}
+      }
 
     // ── Route initialisation ─────────────────────────────────────────────────
     var routingControl = null;
@@ -913,6 +1178,11 @@ function buildNavigationMapHtml(options = {}) {
 
       if (payload.etaLabel !== undefined) {
         state.etaLabel = payload.etaLabel;
+      }
+
+      if (Array.isArray(payload.hospitals)) {
+        state.hospitals = payload.hospitals;
+        renderHospitalMarkers(state.hospitals);
       }
 
       targetMarker.setLatLng(state.destination);

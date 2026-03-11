@@ -14,18 +14,27 @@ const router = express.Router();
 router.post('/', protect, async (req, res) => {
   try {
     const { lat, lng, emergencyType = 'Unknown' } = req.body;
+    const victimLat = Number(lat);
+    const victimLng = Number(lng);
 
-    if (!lat || !lng) {
+    if (!Number.isFinite(victimLat) || !Number.isFinite(victimLng)) {
       return res.status(400).json({ message: 'lat and lng are required' });
     }
+
+    console.log('[dispatch] incoming SOS request:', {
+      patientId: req.user?._id,
+      emergencyType,
+      lat: victimLat,
+      lng: victimLng,
+    });
 
     // Determine if ICU is needed
     const needsICU = ['Cardiac', 'Stroke'].includes(emergencyType);
 
     // ── 1. Find best ambulance ─────────────────────────────────────────────
     const { ambulance, distance: ambDistance } = await findBestAmbulance(
-      lat,
-      lng,
+      victimLat,
+      victimLng,
       needsICU
     );
 
@@ -34,14 +43,15 @@ router.post('/', protect, async (req, res) => {
       hospital,
       distance: hospDistance,
       score: hospitalScore,
-    } = await findBestHospital(lat, lng, emergencyType);
+      breakdown: hospitalScoreBreakdown,
+    } = await findBestHospital(victimLat, victimLng, emergencyType);
 
     // ── 3. Get OSRM routes ────────────────────────────────────────────────
     const routes = await getFullRoute(
       ambulance.location.lat,
       ambulance.location.lng,
-      lat,
-      lng,
+      victimLat,
+      victimLng,
       hospital.location.lat,
       hospital.location.lng
     );
@@ -55,7 +65,7 @@ router.post('/', protect, async (req, res) => {
       hospital: hospital._id,
       emergencyType,
       status: 'dispatched',
-      victimLocation: { lat, lng },
+      victimLocation: { lat: victimLat, lng: victimLng },
       route: routes.toVictim.coordinates,
       eta,
       hospitalScore,
@@ -75,7 +85,7 @@ router.post('/', protect, async (req, res) => {
     io.to('driver').emit('new-emergency', {
       emergencyId: emergency._id,
       emergencyType,
-      victimLocation: { lat, lng },
+      victimLocation: { lat: victimLat, lng: victimLng },
       distance: ambDistance,
       eta,
       route: routes.toVictim.coordinates,
@@ -85,6 +95,8 @@ router.post('/', protect, async (req, res) => {
         address: hospital.address,
         location: hospital.location,
         score: hospitalScore,
+        distance: hospDistance,
+        breakdown: hospitalScoreBreakdown,
       },
       routeToHospital: routes.toHospital.coordinates,
     });
@@ -97,7 +109,7 @@ router.post('/', protect, async (req, res) => {
       status: 'dispatched',
       ambulanceETA: eta,
       ambulanceLocation: ambulance.location,
-      victimLocation: { lat, lng },
+      victimLocation: { lat: victimLat, lng: victimLng },
       hospitalId: hospital._id,
       hospitalName: hospital.name,
       hospitalLocation: hospital.location,
@@ -123,6 +135,7 @@ router.post('/', protect, async (req, res) => {
         address: hospital.address,
         location: hospital.location,
         score: hospitalScore,
+        breakdown: hospitalScoreBreakdown,
         availableBeds: hospital.availableBeds,
         specialists: hospital.specialists,
         distance: hospDistance,
